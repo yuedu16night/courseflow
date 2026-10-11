@@ -1,0 +1,84 @@
+{
+  "$defs": {
+    "ScheduleSlot": {
+      "description": "One weekly meeting occurrence of a section.\n\n`day` uses ISO order: 1=Monday ... 7=Sunday. Times are minutes\nsince midnight, e.g. 08:30 -> 510.",
+      "properties": {
+        "day": {
+          "maximum": 7,
+          "minimum": 1,
+          "title": "Day",
+          "type": "integer"
+        },
+        "start_min": {
+          "maximum": 1440,
+          "minimum": 0,
+          "title": "Start Min",
+          "type": "integer"
+        },
+        "end_min": {
+          "exclusiveMinimum": 0,
+          "maximum": 1440,
+          "title": "End Min",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "day",
+        "start_min",
+        "end_min"
+      ],
+      "title": "ScheduleSlot",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "course_code": {
+      "title": "Course Code",
+      "type": "string"
+    },
+    "semester": {
+      "pattern": "^\\d{4}(SP|FA|SU)$",
+      "title": "Semester",
+      "type": "string"
+    },
+    "section_no": {
+      "maxLength": 8,
+      "minLength": 1,
+      "title": "Section No",
+      "type": "string"
+    },
+    "instructor_name": {
+      "title": "Instructor Name",
+      "type": "string"
+    },
+    "capacity": {
+      "maximum": 500,
+      "minimum": 1,
+      "title": "Capacity",
+      "type": "integer"
+    },
+    "venue": {
+      "title": "Venue",
+      "type": "string"
+    },
+    "slots": {
+      "items": {
+        "$ref": "#/$defs/ScheduleSlot"
+      },
+      "minItems": 1,
+      "title": "Slots",
+      "type": "array"
+    }
+  },
+  "required": [
+    "course_code",
+    "semester",
+    "section_no",
+    "instructor_name",
+    "capacity",
+    "venue",
+    "slots"
+  ],
+  "title": "SectionIn",
+  "type": "object"
+}
