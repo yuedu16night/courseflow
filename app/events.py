@@ -22,6 +22,7 @@ EVT_SEAT_RELEASED = "section.seat_released"
 EVT_WAITLIST_PROMOTED = "waitlist.promoted"
 EVT_PHASE_CHANGED = "phase.changed"
 EVT_CATALOG_VERSIONED = "catalog.versioned"
+EVT_AGENT_TURN = "agent.turn"
 
 
 @dataclass(frozen=True)

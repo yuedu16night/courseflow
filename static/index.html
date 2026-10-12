@@ -43,6 +43,13 @@
   .login-box { max-width:420px; margin:80px auto; }
   pre.log { background:#0f172a; color:#a5f3a5; font-size:11px; padding:12px;
             border-radius:8px; max-height:260px; overflow:auto; }
+  .reply { background:#f8fafc; border:1px solid var(--line); border-radius:8px;
+           padding:12px; white-space:pre-wrap; font-size:13px; line-height:1.65; }
+  .plan { border:1px solid var(--line); border-radius:8px; padding:10px; margin:8px 0; }
+  .tool { display:inline-block; background:#eef2ff; color:var(--brand);
+          border-radius:6px; padding:2px 8px; font-size:11px; margin:2px 4px 2px 0; }
+  .proposal { border:1px dashed var(--brand); background:#f5f7ff; border-radius:8px;
+              padding:10px; margin:8px 0; font-size:13px; }
 </style>
 </head>
 <body>
@@ -88,7 +95,8 @@ const REASON_ZH = { PREREQ_MISSING:"缺少先修课", TIMETABLE_CONFLICT:"课表
   ENROLLMENT_UNKNOWN:"选课记录不存在", INVALID_STATE:"当前状态不允许",
   SEMESTER_UNKNOWN:"学期不存在", PHASE_TERMINAL:"学期已截止" };
 const EVENT_ZH = { "enrollment.state_changed":"选课状态变更", "section.seat_released":"名额释放",
-  "waitlist.promoted":"候补晋升", "phase.changed":"阶段切换", "catalog.versioned":"课程目录更新" };
+  "waitlist.promoted":"候补晋升", "phase.changed":"阶段切换", "catalog.versioned":"课程目录更新",
+  "agent.turn":"智能体交互" };
 const DAY_ZH = ["周一","周二","周三","周四","周五","周六","周日"];
 
 const stateLabel = s => `${STATE_ZH[s]||s}<span class="code">${s}</span>`;
@@ -132,6 +140,7 @@ async function boot(){
 function buildTabs(){
   const tabs = { catalog:"课程目录", enroll:"选课申请", my:"我的选课",
                  timetable:"我的课表" };
+  if(ME.role==="student") Object.assign(tabs,{assistant:"智能选课助手"});
   if(ME.role==="instructor") Object.assign(tabs,{roster:"班级名单"});
   if(["registrar","admin"].includes(ME.role))
     Object.assign(tabs,{admin:"编排管理",audit:"审计与事件"});
@@ -187,6 +196,21 @@ async function render(tab){
       ${grid.map(g=>`<tr><td>${day(g.day)}</td><td>${hh(g.start_min)}–${hh(g.end_min)}</td>
         <td><b>${g.course}</b></td><td>${g.section}</td><td>${g.venue}</td></tr>`).join("")}</table>`
       : `<p class="muted">暂无已确认的选课记录。</p>`}</div>`;
+  }
+  if(tab==="assistant"){
+    const st = (await api("/agent/status")).body;
+    const badge = st.enabled ? `LLM 模式 · ${st.model}` : "离线规则模式（未配置 LLM）";
+    c.innerHTML = `<div class="card"><h3>智能选课助手 <span class="pill VALIDATED">${badge}</span></h3>
+      <p class="muted">助手只能通过工具读取系统事实（课程目录 / 成绩单 / 已选课 / 课表 / 约束策略链），
+      选课规划由<b>确定性规划智能体</b>完成。任何写操作都只会生成「待确认提案」，
+      必须由你点击确认后才经正常接口执行 —— 约束系统与权限控制无法被绕过。</p>
+      <div class="row"><button class="act" onclick="agentPlan()">生成选课方案</button></div>
+      <div class="row"><input id="agentMsg" style="flex:1"
+        placeholder="例如：帮我排一下下学期的课 / CS201 还有名额吗 / 把 CS201 退了">
+        <button class="act" onclick="agentAsk()">提问</button></div>
+      <div id="agentOut"></div></div>
+      <div class="card"><h3>规划智能体结构化输出（方案 A：确定性组合搜索）</h3>
+      <div id="planOut" class="muted">点击「生成选课方案」查看。</div></div>`;
   }
   if(tab==="roster"){
     const sections = (await api("/sections")).body;
@@ -278,6 +302,64 @@ async function createUser(){
   const r = await api("/users",{method:"POST",body:JSON.stringify({username:nu.value,password:np.value,full_name:nn.value,role:nr.value})});
   show(r.status===200, r.status===200?"用户创建成功":(r.body.detail||JSON.stringify(r.body)));
   render("users");
+}
+
+/* ---- 智能选课助手（方案 A 规划 + 方案 B 编排） ---- */
+let AGENT_PENDING = [];
+const esc = s => String(s).replace(/[<>&]/g, c => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;" }[c]));
+// LLM 常带 Markdown；先转义再还原极少数行内样式，保证既不破版也无注入风险
+const md = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+const slotText = ss => ss.map(s => day(s.day)+" "+hh(s.start_min)+"–"+hh(s.end_min)).join("，");
+
+async function agentPlan(){
+  const r = await api("/agent/plan",{method:"POST",body:JSON.stringify({top_k:3})});
+  if(r.status!==200){ show(false,"规划失败："+JSON.stringify(r.body.detail||r.body)); return; }
+  const b = r.body, plans = b.plans||[];
+  document.getElementById("planOut").innerHTML =
+    (plans.length ? plans.map(p=>`<div class="plan"><b>方案 ${p.rank}</b> — 合计 <b>${p.total_credits}</b> 学分
+      <table style="margin-top:6px"><tr><th>课程</th><th>学分</th><th>教学班</th><th>上课时间</th><th>余量</th><th>理由</th></tr>
+      ${p.picks.map(i=>`<tr><td><b>${i.course}</b> ${esc(i.title)}</td><td>${i.credits}</td><td>${i.section_no}</td>
+        <td>${slotText(i.slots)}</td><td>${i.free_seats}</td>
+        <td class="muted">${i.reasons.map(esc).join("；")}</td></tr>`).join("")}</table>
+      ${p.unlocks.length?`<p class="muted">修完后可解锁：${p.unlocks.join("、")}</p>`:""}</div>`).join("")
+      : `<p class="muted">当前没有可行的选课组合方案。</p>`)
+    + ((b.excluded_from_best_plan||[]).length ? `<p class="muted">未纳入第 1 方案：`
+        + b.excluded_from_best_plan.map(e=>`${e.course}（${e.reason_code}）`).join("、")+`</p>` : "")
+    + ((b.blocked_by_prerequisites||[]).length ? `<p class="muted">先修未满足：`
+        + b.blocked_by_prerequisites.map(e=>`${e.course}（缺 ${e.missing_prerequisites.join("、")}）`).join("、")+`</p>` : "");
+}
+
+async function agentAsk(){
+  const el = document.getElementById("agentMsg");
+  const msg = (el.value||"").trim();
+  if(!msg) return;
+  const r = await api("/agent/chat",{method:"POST",body:JSON.stringify({message:msg})});
+  if(r.status!==200){ show(false,"提问失败："+JSON.stringify(r.body.detail||r.body)); return; }
+  const b = r.body; AGENT_PENDING = b.pending_actions||[];
+  const tools = (b.tool_trace||[]).map(t=>`<span class="tool">${t.tool} · ${t.status}</span>`).join("");
+  const proposals = AGENT_PENDING.map((a,i)=>`<div class="proposal">${esc(a.summary)}
+      <button class="act" style="margin-left:8px" onclick="agentConfirm(${i})">确认执行</button></div>`).join("");
+  document.getElementById("agentOut").innerHTML =
+    `<div class="row"><span class="pill VALIDATED">${b.mode==="llm"?("LLM · "+b.model):"离线规则模式"}</span>${tools}</div>`
+    + (b.note?`<p class="muted">${esc(b.note)}</p>`:"")
+    + `<div class="reply" style="margin-top:8px">${md(b.reply)}</div>` + proposals;
+}
+
+async function agentConfirm(i){
+  const a = AGENT_PENDING[i];
+  if(!a) return;
+  const r = await api("/agent/actions",{method:"POST",body:JSON.stringify({tool:a.tool,args:a.args})});
+  const ok = r.status===200;
+  const msg = ok ? `已执行，当前状态：${STATE_ZH[r.body.state]||r.body.state}`
+                 : `执行失败：${r.body.detail?.message||JSON.stringify(r.body)}`;
+  show(ok, msg);
+  AGENT_PENDING = [];
+  document.querySelectorAll("#agentOut .proposal").forEach(e=>e.remove());
+  const box = document.createElement("div");           // 面板内保留结果，不随横幅消失
+  box.className = "banner " + (ok ? "ok" : "err");
+  box.style.display = "block";
+  box.textContent = "写操作结果：" + msg;
+  document.getElementById("agentOut").appendChild(box);
 }
 
 if(localStorage.token){ TOKEN=localStorage.token;

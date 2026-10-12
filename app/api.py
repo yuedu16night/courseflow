@@ -9,8 +9,20 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app import repositories as repo
+from app.agent.llm import ChatLLM
+from app.agent.orchestrator import AgentOrchestrator
+from app.agent.planner import PlannerAgent
 from app.enums import Role
-from app.models import CourseIn, EnrollmentIn, LoginIn, SectionIn, UserIn
+from app.models import (
+    AgentActionIn,
+    AgentChatIn,
+    AgentPlanIn,
+    CourseIn,
+    EnrollmentIn,
+    LoginIn,
+    SectionIn,
+    UserIn,
+)
 from app.rbac import role_has
 from app.runtime import CURRENT_SEMESTER
 from app.services import (
@@ -243,3 +255,59 @@ def audit(enrollment_id: int | None = None, conn=Depends(get_conn),
 @api.get("/admin/events")
 def events(conn=Depends(get_conn), _=Depends(require("events:read"))):
     return repo.list_events(conn)
+
+
+# ---------------------------------------------------------------------------
+# agent layer — scheme A (deterministic planning) + scheme B (LLM orchestration)
+# ---------------------------------------------------------------------------
+def _int_arg(args: dict, key: str) -> int:
+    try:
+        return int(args[key])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(422, f"缺少或非法的参数 {key}")
+
+
+@api.get("/agent/status")
+def agent_status(_=Depends(require("agent:use"))):
+    """前端据此显示当前是 LLM 模式还是离线规则模式。"""
+    llm = ChatLLM.from_env()
+    return {"enabled": llm is not None,
+            "mode": "llm" if llm else "offline",
+            "model": llm.label if llm else None}
+
+
+@api.post("/agent/plan")
+def agent_plan(body: AgentPlanIn, conn=Depends(get_conn),
+               user=Depends(require("agent:use"))):
+    """方案 A：确定性的选课组合规划（只读）。"""
+    return PlannerAgent(conn, CURRENT_SEMESTER).plan(
+        user, max_credits=body.max_credits, top_k=body.top_k)
+
+
+@api.post("/agent/chat")
+def agent_chat(body: AgentChatIn, request: Request, conn=Depends(get_conn),
+               user=Depends(require("agent:use"))):
+    """方案 B：自然语言编排（未配置 LLM 时自动降级为离线规则模式）。"""
+    orchestrator = AgentOrchestrator(conn, request.app.state.bus, user,
+                                     CURRENT_SEMESTER)
+    return orchestrator.chat(body.message, body.history)
+
+
+@api.post("/agent/actions")
+def agent_action(body: AgentActionIn, request: Request, conn=Depends(get_conn),
+                 user=Depends(require("agent:use"))):
+    """用户确认后执行写操作：走正常服务层，RBAC 与约束策略链全量生效。"""
+    svc = EnrollmentService(conn, request.app.state.bus)
+    if body.tool == "submit_enrollment":
+        if not role_has(user["role"], "enroll:create"):
+            raise HTTPException(403, "当前角色无权提交选课申请")
+        try:
+            return svc.enroll(user, _int_arg(body.args, "section_id"))
+        except DomainError as e:
+            map_domain_error(e)
+    if not role_has(user["role"], "enroll:drop_own"):
+        raise HTTPException(403, "当前角色无权退课")
+    try:
+        return svc.drop(user, _int_arg(body.args, "enrollment_id"))
+    except DomainError as e:
+        map_domain_error(e)

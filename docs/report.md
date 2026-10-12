@@ -29,9 +29,14 @@ chain (prerequisites, timetable interval conflicts, credit ceilings,
 duplicate/retake rules) that yields machine-readable reason codes. A naive
 monolithic implementation — a database and a form — fails here because
 constraint logic, stage behavior, and authorization concerns entangle into
-untestable spaghetti. We demonstrate the architecture with 37 automated
+untestable spaghetti. We demonstrate the architecture with 73 automated
 tests and a scripted end-to-end execution trace, and we analyze scaling
-limits and architectural trade-offs.
+limits and architectural trade-offs. As an optional extension (§2.4) a
+two-part agent layer is added *above* the unchanged service API — a
+deterministic combination planner plus an LLM tool-calling orchestrator
+that degrades to an offline rule mode — showing that a well-layered system
+can be automated without weakening its constraints or its authorization
+model.
 
 ---
 
@@ -103,6 +108,7 @@ REST to service calls and enforces RBAC, but contains no domain logic.
 flowchart TB
     subgraph Clients["External boundary"]
         UI["Browser demo UI<br/>(static/index.html)"]
+        AGENT["Agent layer<br/>(app/agent — planner +<br/>LLM orchestrator, see §2.4)"]
         SIS["SIS import<br/>(transcripts)"]
     end
 
@@ -135,6 +141,7 @@ flowchart TB
     end
 
     UI --> API
+    AGENT --> API
     SIS --> R1
     R1 & R2 & R3 & R4 --> CAT & ENR & ALLOC & PH
     ENR --> FSM
@@ -339,15 +346,112 @@ sit on top (an instructor may open a roster only when the section's
 auditing "who can do what" is reading one table, and evolving roles does
 not touch endpoint code.
 
+### 2.4 Agent Layer (optional extension)
+
+Once the system is a four-layer machine with an event bus, an FSM, and a
+policy chain that reports machine-readable reason codes, it becomes a
+natural substrate for automation: the reason codes are exactly what an
+automated planner needs to explain itself, and the prerequisite DAG is
+exactly the search space it needs to explore. The agent layer therefore
+adds **no new domain rules** — it is a second consumer of the same service
+API, sitting beside the browser UI.
+
+```mermaid
+flowchart TB
+    USER["学生 / Student"]
+    subgraph AgentLayer["Agent layer (app/agent) — scheme A + scheme B"]
+        ORCH["AgentOrchestrator<br/>LLM tool-calling loop<br/>(offline rule mode fallback)"]
+        TOOLS["ToolRegistry<br/>11 tools over existing use-cases"]
+        PLAN["PlannerAgent<br/>constraint-satisfying<br/>combination search (read-only)"]
+        LLM["ChatLLM<br/>OpenAI-compatible client"]
+    end
+    subgraph Existing["Existing layers (unchanged)"]
+        API["API layer + RBAC guards"]
+        SVC["Control plane services"]
+        DOM["Pure domain: FSM · policies · graph"]
+    end
+
+    USER --> ORCH
+    ORCH --> LLM
+    ORCH --> TOOLS
+    TOOLS -- "plan_courses" --> PLAN
+    TOOLS -- "check_course / my_* / list_*" --> SVC
+    PLAN --> DOM
+    PLAN --> REPO2["repositories (read-only)"]
+    ORCH -- "pending proposal" --> USER
+    USER -- "confirm" --> API
+    API --> SVC
+```
+
+**Scheme A — deterministic planning (`app/agent/planner.py`).** The system
+already validates *one* enrollment request; the planner answers the harder
+question "what should this student take *as a set*?". Each currently
+selectable course is a decision point (skip, or take one of its sections);
+a backtracking depth-first enumeration explores combinations under three
+constraints — the prerequisite DAG, pairwise timetable overlap, and the
+per-semester credit ceiling — with node-count pruning to bound the search.
+Output is fully deterministic (identical world state ⇒ identical plans),
+read-only, and unit-testable without HTTP or an LLM. Ordering is by credit
+utilisation, then seat availability, then lexicographic course codes; each
+plan carries per-course reasons and each *excluded* course carries a reason
+code (`TIMETABLE_CONFLICT`, `CREDIT_LIMIT`, `LOWER_RANK`), plus a
+`blocked_by_prerequisites` frontier for courses that are still locked.
+
+**Scheme B — natural-language orchestration (`app/agent/tools.py`,
+`llm.py`, `orchestrator.py`).** Eleven tools wrap existing use-cases
+(`list_courses`, `check_course`, `my_timetable`, `plan_courses`, …) in
+OpenAI function-calling form; the orchestrator runs the
+call → observe → call loop and returns the reply together with the tool
+trace and any pending actions. The LLM decides *which* tool to call; it
+never performs planning or validation itself. If no API key is configured
+(or the endpoint is unreachable) the orchestrator degrades to a
+deterministic offline rule mode: instead of a brittle first-match keyword
+chain, each intent (*timetable / drop / enroll / plan / check*) carries a
+weighted synonym table, the message is scored against all of them, and the
+highest-scoring intent wins — with a fixed tie-break order and a confidence
+floor, so loose phrasings ("下学期帮我排一下", "选啥好", "把 CS201 退了")
+route correctly while the behaviour stays fully reproducible. Below the
+confidence floor the responder falls back gracefully: a bare course code is
+treated as a course query, and otherwise it answers with help text that is
+prefixed by the student's *current* enrollment state rather than a static
+blurb. Write intents are resolved to a concrete target before any proposal
+is built (a drop looks up the student's own enrollment and proposes
+`drop_enrollment`; if nothing matches, it says so instead of guessing).
+Because all of this is deterministic, the feature is demonstrable and fully
+testable with no network — **73 tests, none of which touch the internet**.
+The LLM path was additionally exercised against a live endpoint (DeepSeek);
+doing so surfaced two prompt-level failure modes that no mock would have
+revealed — the model would *describe* a write proposal in prose without
+actually calling the write tool (so no confirmation button was rendered),
+and it would re-ask for permission before creating a proposal the user had
+already explicitly requested. Both are now pinned down by explicit system-
+prompt constraints, and the reply renderer tolerates the Markdown a real
+model emits (escape-then-format, so no injection surface is introduced).
+This is a useful illustration of the architecture's own claim: the write
+gate held, and the failure showed up as a *missing button* rather than as an
+unauthorized database write.
+
+**Two invariants keep the agent inside the architecture.**
+
+1. *Writes are never executed by the agent.* The write tools return
+   `requires_confirmation` proposals; a confirmed action is re-issued
+   through the normal REST endpoint, so the FSM transitions and the policy
+   chain apply unchanged. A test asserts that confirming an enrollment for
+   a student missing the prerequisite still fails with `PREREQ_MISSING`.
+2. *The agent acts as the caller.* Tools run under the caller's identity
+   (a student agent cannot read another student's data), the endpoint is
+   guarded by the new `agent:use` capability, and every turn appends an
+   `agent.turn` record to the append-only event log.
+
 ---
 
 ## 3. Complexity Management Evaluation
 
 | Complexity Dimension | Identified Bottleneck / Anti-Pattern | Applied Architectural Abstraction | Quantitative / Qualitative Outcome |
 | :--- | :--- | :--- | :--- |
-| **Structural** | Monolithic endpoint where HTTP, SQL, constraint rules, and state updates are interleaved; any rule change edits the same function | Strict 4-layer architecture (API → services → pure domain → repository); single SQL module; in-process event bus decoupling reactive components | Domain policies are pure functions unit-tested without HTTP/DB; 37 tests pass in ~17 s; replacing SQLite requires touching exactly one module |
-| **Behavioral** | Context loss across registration stages; scattered `if phase == …` checks; waitlist polling; undocumented state edits | Formal FSM (declared transition table + audit per transition); 4-stage semester machine with **stage handover snapshots** persisted per advance; **event-driven** waitlist promotion; capability-matrix RBAC with row-level scoping | Illegal transitions are unrepresentable; zero state loss across stage handovers (snapshot queryable via API); promotion triggered by event with no polling loop; every decision traceable to actor+reason in the audit trail |
-| **Semantic** | Unvalidated catalog edits corrupting prerequisite chains mid-semester; silent data drift; ad-hoc string error handling | Immutable **catalog versioning** (new version per edit, one active); DAG integrity via cycle detection on every mutation + topological study-order endpoint; formal JSON Schemas exported as registry artifacts; composable policy chain with machine-readable reason codes (`PREREQ_MISSING`, `TIMETABLE_CONFLICT`, `CREDIT_LIMIT`, `DUPLICATE_ENROLLMENT`, `ALREADY_PASSED`) | 100% of API payloads schema-validated; cycle edges rejected at write time (demonstrated in trace §2); every rejection carries a precise, testable reason code |
+| **Structural** | Monolithic endpoint where HTTP, SQL, constraint rules, and state updates are interleaved; any rule change edits the same function | Strict 4-layer architecture (API → services → pure domain → repository); single SQL module; in-process event bus decoupling reactive components; agent layer added as a *second consumer* of the same service API — no logic duplicated | Domain policies are pure functions unit-tested without HTTP/DB; 73 tests pass in ~38 s; replacing SQLite requires touching exactly one module; the agent layer was added without modifying any existing policy, FSM, or service |
+| **Behavioral** | Context loss across registration stages; scattered `if phase == …` checks; waitlist polling; undocumented state edits | Formal FSM (declared transition table + audit per transition); 4-stage semester machine with **stage handover snapshots** persisted per advance; **event-driven** waitlist promotion; capability-matrix RBAC with row-level scoping; agent writes use a **propose → confirm → execute** protocol so the FSM and policy chain cannot be bypassed; agent *reads* intents are resolved by weighted scoring with a confidence floor rather than first-match keywords | Illegal transitions are unrepresentable; zero state loss across stage handovers (snapshot queryable via API); promotion triggered by event with no polling loop; every decision traceable to actor+reason in the audit trail; agent turns are themselves audited (`agent.turn`); loose phrasings route deterministically and low-confidence input degrades to a state-aware answer instead of a wrong action |
+| **Semantic** | Unvalidated catalog edits corrupting prerequisite chains mid-semester; silent data drift; ad-hoc string error handling | Immutable **catalog versioning** (new version per edit, one active); DAG integrity via cycle detection on every mutation + topological study-order endpoint; formal JSON Schemas exported as registry artifacts; composable policy chain with machine-readable reason codes (`PREREQ_MISSING`, `TIMETABLE_CONFLICT`, `CREDIT_LIMIT`, `DUPLICATE_ENROLLMENT`, `ALREADY_PASSED`); `PlannerAgent` upgrades single-request validation into constraint-satisfying **combination search** reusing the same codes | 100% of API payloads schema-validated; cycle edges rejected at write time (demonstrated in trace §2); every rejection carries a precise, testable reason code; planning output is deterministic and explains both inclusions and exclusions |
 
 ---
 
@@ -418,14 +522,18 @@ The test suite mirrors the same guarantees at CI speed:
 
 ```text
 $ python -m pytest tests -q
-37 passed, 1 warning in ~17s
+73 passed, 1 warning in ~38s
 ```
 
 covering: FSM legality, all four policies, DAG cycle detection and
 topological order, RBAC (including row-level instructor scoping), catalog
 versioning, phase linearity and handover snapshots, seeded-lottery
 determinism (two runs, same seed → same outcome), FIFO promotion, and
-ineligible-head skipping with expiration reasons.
+ineligible-head skipping with expiration reasons. The agent layer adds 21
+cases of its own: eligibility filtering, timetable/credit constraints,
+determinism of the planner, unmet-prerequisite reporting, the
+propose→confirm write protocol, rejection of unknown write tools, and the
+`agent.turn` audit trail.
 
 ---
 
@@ -536,9 +644,10 @@ courseflow/
 │   ├── repositories.py    # the only SQL module
 │   ├── database.py        # SQLite DDL + connections
 │   ├── enums.py / runtime.py
+│   └── agent/             # agent layer (§2.4): planner + tools + llm + orchestrator
 ├── static/index.html      # browser demo UI
 ├── demo/seed_demo.py      # scripted end-to-end demo (writes demo_trace.md)
-├── tests/                 # 37 pytest cases
+├── tests/                 # 73 pytest cases
 └── docs/                  # proposal, this report, JSON Schemas, demo trace
 ```
 
@@ -548,5 +657,5 @@ courseflow/
 pip install -r requirements.txt
 python run.py                  # serves API + demo UI at http://127.0.0.1:8000
 python demo/seed_demo.py       # scripted end-to-end scenario + trace
-python -m pytest tests -q     # 37 tests
+python -m pytest tests -q     # 73 tests
 ```

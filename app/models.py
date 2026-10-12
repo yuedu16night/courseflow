@@ -64,3 +64,22 @@ class SectionIn(BaseModel):
 
 class EnrollmentIn(BaseModel):
     section_id: int
+
+
+# ---------------------------------------------------------------------------
+# agent layer (scheme A: planning, scheme B: LLM orchestration)
+# ---------------------------------------------------------------------------
+class AgentPlanIn(BaseModel):
+    max_credits: int | None = Field(default=None, ge=1, le=60)
+    top_k: int = Field(default=3, ge=1, le=10)
+
+
+class AgentChatIn(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    history: list[dict] = Field(default_factory=list)
+
+
+class AgentActionIn(BaseModel):
+    """用户确认后的写操作：只接受白名单工具与参数。"""
+    tool: str = Field(pattern="^(submit_enrollment|drop_enrollment)$")
+    args: dict = Field(default_factory=dict)

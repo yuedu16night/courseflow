@@ -21,6 +21,8 @@ PERMISSIONS: dict[str, set[Role]] = {
     # student actions
     "enroll:create":      {Role.STUDENT},
     "enroll:drop_own":    {Role.STUDENT},
+    # agent layer (bound to the caller's identity, so row-level checks still apply)
+    "agent:use":          {Role.STUDENT},
     # registrar actions
     "catalog:write":      {Role.REGISTRAR},
     "section:write":      {Role.REGISTRAR},
