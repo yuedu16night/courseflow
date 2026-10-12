@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CourseFlow — Registration Orchestration Demo</title>
+<title>CourseFlow — 智能选课编排演示系统</title>
 <style>
   :root { --bg:#f5f7fb; --card:#fff; --ink:#1c2333; --muted:#6b7280;
           --brand:#3454d1; --ok:#0f8a4d; --warn:#b45309; --bad:#b91c1c; --line:#e5e7eb; }
   * { box-sizing:border-box; margin:0; }
-  body { font-family:"Segoe UI",system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  body { font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif; background:var(--bg); color:var(--ink); }
   header { background:var(--brand); color:#fff; padding:14px 24px; display:flex;
            justify-content:space-between; align-items:center; }
   header h1 { font-size:18px; font-weight:600; }
@@ -20,6 +20,7 @@
   .tabs button.active { background:var(--brand); color:#fff; border-color:var(--brand); }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
           padding:18px; margin-bottom:14px; }
+  .card h3 { margin-bottom:10px; font-size:15px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th,td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); }
   th { color:var(--muted); font-weight:600; font-size:12px; }
@@ -34,6 +35,7 @@
   input,select { padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:6px 0; }
   .muted { color:var(--muted); font-size:12px; }
+  .code { color:var(--muted); font-size:11px; opacity:.75; margin-left:4px; }
   .banner { padding:9px 12px; border-radius:8px; font-size:13px; margin:10px 0; display:none; }
   .banner.ok{display:block;background:#d1fae5;color:var(--ok)}
   .banner.err{display:block;background:#fee2e2;color:var(--bad)}
@@ -48,21 +50,21 @@
 <div id="loginView">
   <div class="card login-box">
     <h2 style="margin-bottom:4px">CourseFlow</h2>
-    <p class="muted" style="margin-bottom:14px">Registration & Timetable Orchestration — demo</p>
-    <div class="row"><input id="lu" placeholder="username" value="alice" style="flex:1"></div>
-    <div class="row"><input id="lp" type="password" placeholder="password" value="alice123" style="flex:1"></div>
-    <div class="row"><button class="act" style="flex:1" onclick="doLogin()">Sign in</button></div>
-    <p class="muted">Accounts: alice/bob/charlie/dave (student) · carol (instructor,
-    pwd +123 suffix each, e.g. carol123) · registrar/reg123 · admin/admin123</p>
+    <p class="muted" style="margin-bottom:14px">智能选课与排课编排系统 · 演示</p>
+    <div class="row"><input id="lu" placeholder="用户名" value="alice" style="flex:1"></div>
+    <div class="row"><input id="lp" type="password" placeholder="密码" value="alice123" style="flex:1"></div>
+    <div class="row"><button class="act" style="flex:1" onclick="doLogin()">登录</button></div>
+    <p class="muted">账号：alice / bob / charlie / dave / erin（学生）· carol（教师）·
+    密码均为「用户名+123」 · registrar/reg123（教务）· admin/admin123（管理员）</p>
     <div id="loginBanner" class="banner"></div>
   </div>
 </div>
 
 <div id="appView" style="display:none">
   <header>
-    <h1>CourseFlow <span style="font-weight:300">| semester <span id="sem">2026FA</span></span></h1>
+    <h1>CourseFlow <span style="font-weight:300">| 学期 <span id="sem">2026FA</span></span></h1>
     <div class="who"><span id="whoami"></span> · <span id="phasePill"></span> ·
-      <button class="act gray" onclick="logout()">logout</button></div>
+      <button class="act gray" onclick="logout()">退出登录</button></div>
   </header>
   <main>
     <div class="tabs" id="tabs"></div>
@@ -73,6 +75,29 @@
 
 <script>
 let TOKEN=null, ME=null, PHASE=null;
+
+/* ---- 术语映射：后端枚举/错误码保留英文，界面显示中文 ---- */
+const STATE_ZH = { SUBMITTED:"已提交", VALIDATED:"已校验", ENROLLED:"已选上",
+  WAITLISTED:"候补中", REJECTED:"已拒绝", CANCELLED:"已取消", EXPIRED:"已失效", DROPPED:"已退课" };
+const PHASE_ZH = { pre_enrollment:"预选阶段", allocation:"抽签分配", add_drop:"补退选", closed:"已截止" };
+const ROLE_ZH  = { student:"学生", instructor:"教师", registrar:"教务", admin:"管理员" };
+const REASON_ZH = { PREREQ_MISSING:"缺少先修课", TIMETABLE_CONFLICT:"课表时间冲突",
+  CREDIT_LIMIT:"超出学分上限", DUPLICATE_ENROLLMENT:"重复选课", ALREADY_PASSED:"课程已通过",
+  PREREQ_CYCLE:"先修课成环", PREREQ_UNKNOWN:"先修课不存在", COURSE_UNKNOWN:"课程不存在",
+  SECTION_UNKNOWN:"教学班不存在", PHASE_LOCKED:"阶段锁定", WRONG_PHASE:"阶段不正确",
+  ENROLLMENT_UNKNOWN:"选课记录不存在", INVALID_STATE:"当前状态不允许",
+  SEMESTER_UNKNOWN:"学期不存在", PHASE_TERMINAL:"学期已截止" };
+const EVENT_ZH = { "enrollment.state_changed":"选课状态变更", "section.seat_released":"名额释放",
+  "waitlist.promoted":"候补晋升", "phase.changed":"阶段切换", "catalog.versioned":"课程目录更新" };
+const DAY_ZH = ["周一","周二","周三","周四","周五","周六","周日"];
+
+const stateLabel = s => `${STATE_ZH[s]||s}<span class="code">${s}</span>`;
+const phaseLabel = p => `${PHASE_ZH[p]||p}<span class="code">${p}</span>`;
+const reasonZh = r => { if(!r) return "";
+  const m = r.match(/^([A-Z_]+)(?::|：)?\s?(.*)$/);
+  return (m && REASON_ZH[m[1]]) ? `${REASON_ZH[m[1]]}：${m[2]||""}` : r; };
+const eventZh = t => `${EVENT_ZH[t]||t}<span class="code">${t}</span>`;
+
 const api = async (path, opts={}) => {
   const r = await fetch("/api"+path, {...opts,
     headers:{ "Content-Type":"application/json", ...(TOKEN?{Authorization:"Bearer "+TOKEN}:{}) , ...(opts.headers||{})}});
@@ -84,7 +109,8 @@ const show = (ok,msg)=>{ const b=document.getElementById("banner");
 
 async function doLogin(){
   const r = await api("/auth/login",{method:"POST",body:JSON.stringify({username:lu.value,password:lp.value})});
-  if(r.status!==200){ const b=document.getElementById("loginBanner"); b.className="banner err"; b.textContent="Login failed"; return; }
+  if(r.status!==200){ const b=document.getElementById("loginBanner"); b.className="banner err";
+    b.textContent="登录失败：" + (r.body.detail || "用户名或密码错误"); return; }
   TOKEN=r.body.token; ME=r.body; localStorage.token=TOKEN;
   document.getElementById("loginView").style.display="none";
   document.getElementById("appView").style.display="block";
@@ -93,22 +119,23 @@ async function doLogin(){
 function logout(){ localStorage.clear(); location.reload(); }
 
 async function boot(){
-  document.getElementById("whoami").textContent = `${ME.full_name} (${ME.role})`;
+  document.getElementById("whoami").textContent = `${ME.full_name}（${ROLE_ZH[ME.role]||ME.role}）`;
   const r = await api("/auth/me",{headers:{Authorization:"Bearer "+TOKEN}});
   ME = {...ME, ...r.body};
+  document.getElementById("whoami").textContent = `${ME.full_name}（${ROLE_ZH[ME.role]||ME.role}）`;
   const pr = await api("/admin/phase");
   PHASE = pr.status===200 ? pr.body.phase : "pre_enrollment";
-  document.getElementById("phasePill").innerHTML = `<span class="pill VALIDATED">${PHASE}</span>`;
+  document.getElementById("phasePill").innerHTML = `<span class="pill VALIDATED">${phaseLabel(PHASE)}</span>`;
   buildTabs(); render();
 }
 
 function buildTabs(){
-  const tabs = { catalog:"Course Catalog", enroll:"Enroll", my:"My Registrations",
-                 timetable:"My Timetable" };
-  if(ME.role==="instructor") Object.assign(tabs,{roster:"Rosters"});
+  const tabs = { catalog:"课程目录", enroll:"选课申请", my:"我的选课",
+                 timetable:"我的课表" };
+  if(ME.role==="instructor") Object.assign(tabs,{roster:"班级名单"});
   if(["registrar","admin"].includes(ME.role))
-    Object.assign(tabs,{admin:"Orchestration",audit:"Audit & Events"});
-  if(ME.role==="admin") Object.assign(tabs,{users:"Users"});
+    Object.assign(tabs,{admin:"编排管理",audit:"审计与事件"});
+  if(ME.role==="admin") Object.assign(tabs,{users:"用户管理"});
   const el=document.getElementById("tabs"); el.innerHTML="";
   for(const [k,label] of Object.entries(tabs)){
     const b=document.createElement("button"); b.textContent=label; b.dataset.k=k;
@@ -123,125 +150,133 @@ async function render(tab){
   const c = document.getElementById("content");
   if(tab==="catalog"){
     const [courses, sections] = await Promise.all([api("/courses"), api("/sections")]);
-    c.innerHTML = `<div class="card"><h3>Catalog (immutable per semester, versioned)</h3>
-      <table><tr><th>Code</th><th>Title</th><th>Credits</th><th>Prereqs</th><th>v</th></tr>
+    c.innerHTML = `<div class="card"><h3>课程目录（按学期版本化，不可变）</h3>
+      <table><tr><th>课程代码</th><th>课程名称</th><th>学分</th><th>先修课程</th><th>版本</th></tr>
       ${courses.body.map(x=>`<tr><td><b>${x.code}</b></td><td>${x.title}</td><td>${x.credits}</td>
-        <td>${x.prerequisites.join(", ")||"—"}</td><td>${x.catalog_version}</td></tr>`).join("")}</table></div>
-      <div class="card"><h3>Sections — phase: <span class="pill VALIDATED">${PHASE}</span></h3>
-      <table><tr><th>ID</th><th>Course</th><th>Sec</th><th>Instructor</th><th>Cap</th><th>Venue</th><th>Slots</th></tr>
+        <td>${x.prerequisites.join("、")||"—"}</td><td>v${x.catalog_version}</td></tr>`).join("")}</table></div>
+      <div class="card"><h3>教学班 — 当前阶段：<span class="pill VALIDATED">${phaseLabel(PHASE)}</span></h3>
+      <table><tr><th>ID</th><th>课程</th><th>班次</th><th>授课教师</th><th>容量</th><th>地点</th><th>上课时间</th></tr>
       ${sections.body.map(s=>`<tr><td>${s.id}</td><td>${s.course_code}</td><td>${s.section_no}</td>
         <td>${s.instructor_name}</td><td>${s.capacity}</td><td>${s.venue}</td>
-        <td>${s.slots.map(sl=>day(sl.day)+" "+hh(sl.start_min)+"–"+hh(sl.end_min)).join(", ")}</td></tr>`).join("")}
+        <td>${s.slots.map(sl=>day(sl.day)+" "+hh(sl.start_min)+"–"+hh(sl.end_min)).join("，")}</td></tr>`).join("")}
       </table></div>`;
   }
   if(tab==="enroll"){
     const sections = (await api("/sections")).body;
-    c.innerHTML = `<div class="card"><h3>Enroll</h3><div class="row">
-      <select id="sec">${sections.map(s=>`<option value="${s.id}">#${s.id} ${s.course_code}.${s.section_no} (cap ${s.capacity})</option>`).join("")}</select>
-      <button class="act" onclick="enroll()">Submit enrollment request</button></div>
-      <p class="muted">The request runs the full policy chain: duplicate → prerequisites (DAG) → timetable → credit limit, then either confirms a seat, joins the waitlist (FCFS), or is rejected with a reason code.</p></div>`;
+    c.innerHTML = `<div class="card"><h3>选课申请</h3><div class="row">
+      <select id="sec">${sections.map(s=>`<option value="${s.id}">#${s.id} ${s.course_code}.${s.section_no}（容量 ${s.capacity}）</option>`).join("")}</select>
+      <button class="act" onclick="enroll()">提交选课请求</button></div>
+      <p class="muted">请求将依次通过完整策略链：重复选课 → 先修课程（DAG）→ 课表冲突 → 学分上限，
+      随后分配名额、进入候补队列（先到先得），或附原因码拒绝。</p></div>`;
   }
   if(tab==="my"){
     const mine = (await api("/enrollments/me")).body;
-    c.innerHTML = `<div class="card"><h3>My registrations</h3><table>
-      <tr><th>ID</th><th>Section</th><th>Semester</th><th>State</th><th>WL#</th><th>Reason</th><th></th></tr>
+    c.innerHTML = `<div class="card"><h3>我的选课记录</h3><table>
+      <tr><th>ID</th><th>教学班</th><th>学期</th><th>状态</th><th>候补序号</th><th>原因</th><th></th></tr>
       ${mine.map(e=>`<tr><td>${e.id}</td><td>${e.section}</td><td>${e.semester}</td>
-        <td><span class="pill ${e.state}">${e.state}</span></td><td>${e.waitlist_seq??"—"}</td>
-        <td class="muted">${e.reason||""}</td>
+        <td><span class="pill ${e.state}">${stateLabel(e.state)}</span></td><td>${e.waitlist_seq??"—"}</td>
+        <td class="muted">${reasonZh(e.reason)}</td>
         ${["ENROLLED","WAITLISTED","VALIDATED"].includes(e.state)
-          ?`<td><button class="act red" onclick="drop(${e.id})">drop</button></td>`:"<td></td>"}</tr>`).join("")}
+          ?`<td><button class="act red" onclick="drop(${e.id})">退课</button></td>`:"<td></td>"}</tr>`).join("")}
       </table></div>`;
   }
   if(tab==="timetable"){
     const grid = (await api("/timetable/me")).body;
-    c.innerHTML = `<div class="card"><h3>Weekly timetable (conflict-free by construction)</h3>
-      ${grid.length? `<table><tr><th>Day</th><th>Time</th><th>Course</th><th>Section</th><th>Venue</th></tr>
+    c.innerHTML = `<div class="card"><h3>每周课表（构造上保证无冲突）</h3>
+      ${grid.length? `<table><tr><th>星期</th><th>时间</th><th>课程</th><th>班次</th><th>地点</th></tr>
       ${grid.map(g=>`<tr><td>${day(g.day)}</td><td>${hh(g.start_min)}–${hh(g.end_min)}</td>
         <td><b>${g.course}</b></td><td>${g.section}</td><td>${g.venue}</td></tr>`).join("")}</table>`
-      : `<p class="muted">No confirmed enrollments yet.</p>`}</div>`;
+      : `<p class="muted">暂无已确认的选课记录。</p>`}</div>`;
   }
   if(tab==="roster"){
     const sections = (await api("/sections")).body;
-    c.innerHTML = `<div class="card"><h3>Section roster (row-level RBAC: own sections only)</h3>
+    c.innerHTML = `<div class="card"><h3>教学班名单（行级权限：仅本人执教班级）</h3>
       <div class="row"><select id="rsec">${sections.map(s=>`<option value="${s.id}">#${s.id} ${s.course_code}.${s.section_no} — ${s.instructor_name}</option>`).join("")}</select>
-      <button class="act" onclick="loadRoster()">Load</button></div><div id="rosterOut"></div></div>`;
+      <button class="act" onclick="loadRoster()">加载名单</button></div><div id="rosterOut"></div></div>`;
   }
   if(tab==="admin"){
-    c.innerHTML = `<div class="card"><h3>Stage orchestration</h3>
-      <p class="muted">Linear phase machine: pre_enrollment → allocation → add_drop → closed.
-      Each advance writes a handover snapshot for the next stage.</p>
-      <div class="row"><button class="act" onclick="advancePhase()">Advance phase</button>
-      <button class="act" onclick="runAllocation()">Run batch allocation (seeded lottery)</button></div></div>
-      <div class="grid2"><div class="card"><h3>All enrollments</h3><div id="allEnr" class="muted">…</div></div>
-      <div class="card"><h3>Recent events</h3><div id="evLog" class="muted">…</div></div></div>`;
+    c.innerHTML = `<div class="card"><h3>阶段编排</h3>
+      <p class="muted">线性阶段机：预选 → 抽签分配 → 补退选 → 截止。
+      每次阶段推进都会为下一阶段写入交接快照（handover snapshot）。</p>
+      <div class="row"><button class="act" onclick="advancePhase()">推进阶段</button>
+      <button class="act" onclick="runAllocation()">运行批量抽签分配（种子随机）</button></div></div>
+      <div class="grid2"><div class="card"><h3>全部选课记录</h3><div id="allEnr" class="muted">…</div></div>
+      <div class="card"><h3>近期事件</h3><div id="evLog" class="muted">…</div></div></div>`;
     loadAdmin();
   }
   if(tab==="audit"){
     const [audit, events] = await Promise.all([api("/admin/audit"), api("/admin/events")]);
     c.innerHTML = `<div class="grid2">
-      <div class="card"><h3>Append-only enrollment audit</h3><table>
-      <tr><th>ID</th><th>Enr</th><th>From → To</th><th>Actor</th><th>Reason</th></tr>
-      ${audit.body.slice(0,40).map(a=>`<tr><td>${a.id}</td><td>${a.enrollment_id}</td>
-        <td>${a.from_state??"∅"} → <b>${a.to_state}</b></td><td>${a.actor}</td>
-        <td class="muted">${a.reason||""}</td></tr>`).join("")}</table></div>
-      <div class="card"><h3>Event log</h3><table>
-      <tr><th>ID</th><th>Type</th><th>Payload</th></tr>
-      ${events.body.slice(0,40).map(e=>`<tr><td>${e.id}</td><td>${e.type}</td>
+      <div class="card"><h3>选课审计链（只追加，不可篡改）</h3><table>
+      <tr><th>ID</th><th>选课</th><th>状态变更</th><th>操作者</th><th>原因</th></tr>
+      ${audit.body.slice(0,40).map(a=>`<tr><td>${a.id}</td><td>#${a.enrollment_id}</td>
+        <td>${STATE_ZH[a.from_state]||"∅"} → <b>${STATE_ZH[a.to_state]||a.to_state}</b><span class="code">${a.to_state}</span></td><td>${a.actor}</td>
+        <td class="muted">${reasonZh(a.reason)}</td></tr>`).join("")}</table></div>
+      <div class="card"><h3>事件日志</h3><table>
+      <tr><th>ID</th><th>类型</th><th>内容</th></tr>
+      ${events.body.slice(0,40).map(e=>`<tr><td>${e.id}</td><td>${eventZh(e.type)}</td>
         <td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${e.payload}</td></tr>`).join("")}
       </table></div></div>`;
   }
   if(tab==="users"){
     const users = (await api("/users")).body;
-    c.innerHTML = `<div class="card"><h3>Users</h3><table><tr><th>Username</th><th>Role</th><th>Name</th></tr>
-      ${users.map(u=>`<tr><td>${u.username}</td><td>${u.role}</td><td>${u.full_name}</td></tr>`).join("")}</table>
-      <h3 style="margin-top:14px">Create user</h3>
-      <div class="row"><input id="nu" placeholder="username"><input id="np" placeholder="password">
-      <select id="nr"><option>student</option><option>instructor</option><option>registrar</option><option>admin</option></select>
-      <input id="nn" placeholder="full name"><button class="act" onclick="createUser()">Create</button></div></div>`;
+    c.innerHTML = `<div class="card"><h3>用户列表</h3><table><tr><th>用户名</th><th>角色</th><th>姓名</th></tr>
+      ${users.map(u=>`<tr><td>${u.username}</td><td>${ROLE_ZH[u.role]||u.role}</td><td>${u.full_name}</td></tr>`).join("")}</table>
+      <h3 style="margin-top:14px">创建用户</h3>
+      <div class="row"><input id="nu" placeholder="用户名"><input id="np" placeholder="密码">
+      <select id="nr"><option value="student">学生</option><option value="instructor">教师</option>
+      <option value="registrar">教务</option><option value="admin">管理员</option></select>
+      <input id="nn" placeholder="姓名"><button class="act" onclick="createUser()">创建</button></div></div>`;
   }
 }
 
-const day = d => ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][d-1];
+const day = d => DAY_ZH[d-1] || d;
 const hh  = m => String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
 
 async function enroll(){
   const r = await api("/enrollments",{method:"POST",body:JSON.stringify({section_id:+document.getElementById("sec").value})});
-  show(r.status===200, r.status===200? `Request state: ${r.body.state}${r.body.waitlist_seq?" (waitlist #"+r.body.waitlist_seq+")":""}`
-    : `Rejected: ${r.body.detail?.code} — ${r.body.detail?.message}`);
+  show(r.status===200, r.status===200? `请求状态：${STATE_ZH[r.body.state]||r.body.state}${r.body.waitlist_seq?"（候补序号 #"+r.body.waitlist_seq+"）":""}`
+    : `请求被拒绝：${reasonZh((r.body.detail?.code||"") + (r.body.detail?.message? "：":"")) }${r.body.detail?.message||""}`);
   render("enroll");
 }
 async function drop(id){
   const r = await api(`/enrollments/${id}/drop`,{method:"POST"});
-  show(r.status===200, r.status===200?`Dropped. State: ${r.body.state}`:`Error: ${r.body.detail||r.body}`);
+  show(r.status===200, r.status===200?`退课成功。当前状态：${STATE_ZH[r.body.state]||r.body.state}`:`操作失败：${r.body.detail||""}`);
   render("my");
 }
 async function loadRoster(){
   const r = await api(`/sections/${document.getElementById("rsec").value}/roster`);
   document.getElementById("rosterOut").innerHTML = r.status===200
-    ? `<table><tr><th>Student</th><th>Name</th></tr>${r.body.enrolled.map(s=>`<tr><td>${s.username}</td><td>${s.full_name}</td></tr>`).join("")||"<tr><td colspan=2 class=muted>empty</td></tr>"}</table>`
-    : `<p class="muted">HTTP ${r.status}: ${JSON.stringify(r.body.detail||r.body)}</p>`;
+    ? `<table><tr><th>学号/用户名</th><th>姓名</th></tr>${r.body.enrolled.map(s=>`<tr><td>${s.username}</td><td>${s.full_name}</td></tr>`).join("")||"<tr><td colspan=2 class=muted>暂无已选上学生</td></tr>"}</table>`
+    : `<p class="muted">加载失败（HTTP ${r.status}）：${r.body.detail||JSON.stringify(r.body)}</p>`;
 }
 async function advancePhase(){
   const r = await api("/admin/phase/advance",{method:"POST"});
-  if(r.status===200){ PHASE=r.body.phase; document.getElementById("phasePill").innerHTML=`<span class="pill VALIDATED">${PHASE}</span>`;
-    show(true,"Phase advanced — handover snapshot stored"); bootTabsKeepAdmin(); }
-  else show(false, `${r.body.detail?.code}: ${r.body.detail?.message}`);
+  if(r.status===200){ PHASE=r.body.phase;
+    document.getElementById("phasePill").innerHTML=`<span class="pill VALIDATED">${phaseLabel(PHASE)}</span>`;
+    show(true,"阶段已推进 — 交接快照已写入"); bootTabsKeepAdmin(); }
+  else show(false, `${reasonZh(r.body.detail?.code||"")}：${r.body.detail?.message||""}`);
 }
 async function bootTabsKeepAdmin(){ buildTabs(); render("admin"); }
 async function runAllocation(){
   const r = await api("/admin/allocation/run?seed=42",{method:"POST"});
-  show(r.status===200, r.status===200?"Allocation executed":"Error: "+JSON.stringify(r.body.detail||r.body));
+  if(r.status===200){
+    const parts = Object.entries(r.body.sections||{}).map(([k,v]) =>
+      `${k}：容量${v.capacity}／请求${v.requests}→中签${v.enrolled}、候补${v.waitlisted}`);
+    show(true, "抽签分配完成（seed=" + r.body.seed + "）— " + parts.join("；"));
+  } else show(false, "分配失败：" + (r.body.detail?.message||JSON.stringify(r.body)));
   loadAdmin();
 }
 async function loadAdmin(){
   const [all, ev] = await Promise.all([api("/enrollments"), api("/admin/events")]);
-  document.getElementById("allEnr").innerHTML = `<table><tr><th>Student</th><th>Section</th><th>State</th></tr>
-    ${all.body.map(e=>`<tr><td>${e.student}</td><td>${e.section}</td><td><span class="pill ${e.state}">${e.state}</span></td></tr>`).join("")}</table>`;
-  document.getElementById("evLog").innerHTML = `<table>${ev.body.slice(0,12).map(e=>`<tr><td>${e.type}</td><td class="muted">${e.payload.slice(0,80)}</td></tr>`).join("")}</table>`;
+  document.getElementById("allEnr").innerHTML = `<table><tr><th>学生</th><th>教学班</th><th>状态</th></tr>
+    ${all.body.map(e=>`<tr><td>${e.student}</td><td>${e.section}</td><td><span class="pill ${e.state}">${stateLabel(e.state)}</span></td></tr>`).join("")}</table>`;
+  document.getElementById("evLog").innerHTML = `<table>${ev.body.slice(0,12).map(e=>
+    `<tr><td>${EVENT_ZH[e.type]||e.type}</td><td class="muted">${e.payload.slice(0,80)}</td></tr>`).join("")}</table>`;
 }
 async function createUser(){
   const r = await api("/users",{method:"POST",body:JSON.stringify({username:nu.value,password:np.value,full_name:nn.value,role:nr.value})});
-  show(r.status===200, r.status===200?"User created":JSON.stringify(r.body.detail||r.body));
+  show(r.status===200, r.status===200?"用户创建成功":(r.body.detail||JSON.stringify(r.body)));
   render("users");
 }
 
@@ -249,9 +284,9 @@ if(localStorage.token){ TOKEN=localStorage.token;
   api("/auth/me").then(r=>{ if(r.status===200){ ME=r.body;
     document.getElementById("loginView").style.display="none";
     document.getElementById("appView").style.display="block";
-    document.getElementById("whoami").textContent=`${ME.full_name} (${ME.role})`;
+    document.getElementById("whoami").textContent=`${ME.full_name}（${ROLE_ZH[ME.role]||ME.role}）`;
     api("/admin/phase").then(p=>{ if(p.status===200){PHASE=p.body.phase;
-      document.getElementById("phasePill").innerHTML=`<span class="pill VALIDATED">${PHASE}</span>`;}
+      document.getElementById("phasePill").innerHTML=`<span class="pill VALIDATED">${phaseLabel(PHASE)}</span>`;}
       buildTabs(); render(); });
   } else localStorage.clear(); });
 }

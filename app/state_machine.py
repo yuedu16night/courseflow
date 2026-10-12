@@ -14,7 +14,7 @@ class InvalidTransitionError(Exception):
     def __init__(self, current: S, target: S):
         self.current = current
         self.target = target
-        super().__init__(f"Illegal FSM transition: {current.value} -> {target.value}")
+        super().__init__(f"非法状态转移：{current.value} → {target.value}")
 
 
 TRANSITIONS: dict[S, set[S]] = {

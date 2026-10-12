@@ -1,68 +1,26 @@
-# Project Proposal — CourseFlow: A Course Registration & Timetable Orchestration System
+# 项目提案 —— CourseFlow：高校选课与排课编排系统
 
-**Course:** MAiNS (Models and Algorithms in Networks and Systems)
-**Project Track:** Option 4 — Self-Defined Project
-**Team Members:** [Name 1], [Name 2], [Name 3]
-**Contact:** [email]
+**课程：** MAiNS（网络与系统中的模型与算法）
+**项目类型：** 类型 4 —— 自定义项目
+**小组成员：** [姓名 1]、[姓名 2]、[姓名 3]
+**联系方式：** [邮箱]
 
-## 1. What We Propose
+## 1. 项目设想
 
-We propose to architect and implement **CourseFlow**, a university course
-registration and timetable orchestration system. Registration week is a
-canonical example of macroscopic complexity in a campus information system:
-thousands of students submit concurrent, conflicting requests against a
-shared pool of capacity-constrained sections, under rules that change
-over time (prerequisite chains, credit ceilings, multi-stage enrollment
-calendars) and by actor role (students, instructors, the registrar's
-office). A naive monolithic "database + form" implementation fails here:
-constraint logic leaks into every endpoint, stage-dependent behavior is
-scattered across `if` statements, and no one can reconstruct why a student
-was admitted, waitlisted, or rejected.
+我们计划设计并实现 **CourseFlow**，一个高校选课与排课编排系统。选课周是校园信息系统中宏观复杂性的典型案例：成千上万的学生针对共享的、容量受限的教学班提交并发且相互冲突的请求，而规则会随时间变化（先修课程链、学分上限、多阶段的选课日历），并因操作者角色而异（学生、教师、教务处）。朴素的单体「数据库 + 表单」实现会在这里失效：约束逻辑泄漏到每一个接口中，依赖阶段的行为散落在各处 `if` 判断里，最终无人能够还原某个学生为何被录取、进入候补或被拒绝。
 
-## 2. Why It Has Non-Trivial Complexity (per the MAiNS framework)
+## 2. 为何具有非平凡复杂性（依据 MAiNS 分析框架）
 
-- **Structural complexity.** CourseFlow enforces a strict layered
-  architecture: REST API → orchestration services → pure domain policies →
-  repository/persistence, with an event bus decoupling reactive components
-  from request handling. HTTP concerns never leak into domain logic.
-- **Behavioral & orchestration complexity.** Each enrollment is governed by
-  an explicit finite state machine (SUBMITTED → VALIDATED → ENROLLED /
-  WAITLISTED / REJECTED → …), audited in an append-only trail. The semester
-  itself is a multi-stage pipeline (pre-enrollment → allocation → add/drop →
-  closed): every stage transition performs a **stage handover** that
-  snapshots in-flight context for the next stage, and stage behavior differs
-  (capacity-blind wishes vs. seeded batch lottery vs. first-come-first-served
-  with event-driven waitlist promotion). RBAC (student / instructor /
-  registrar / admin) is enforced through a capability matrix plus row-level
-  checks (e.g., instructors may only view rosters of their own sections).
-- **Semantic & domain complexity.** The course catalog is a formal, versioned
-  registry: course entries are immutable per catalog version and carry a
-  **prerequisite DAG** whose integrity is checked on every mutation (cycle
-  detection) and analyzed via topological ordering. Enrollment requests are
-  validated against a composable constraint system: prerequisite coverage,
-  timetable interval-overlap conflict detection, per-semester credit
-  ceilings, and duplicate/retake rules — each producing machine-readable
-  reason codes.
+- **结构性复杂度。** CourseFlow 采用严格的分层架构：REST API → 编排服务 → 纯领域策略 → 仓储/持久化，并通过事件总线将响应式组件与请求处理解耦。HTTP 相关关切绝不会泄漏进领域逻辑。
+- **行为与编排复杂度。** 每一条选课记录都由显式的有限状态机（SUBMITTED → VALIDATED → ENROLLED / WAITLISTED / REJECTED → …）管理，并记录在只追加（append-only）的审计链中。学期本身是一条多阶段流水线（预选 → 抽签分配 → 补退选 → 截止）：每一次阶段推进都会执行一次**阶段交接**，为下一阶段快照保存在途上下文；且各阶段行为各不相同（不计容量的志愿填报 vs. 带种子的批量抽签 vs. 先到先得并配合事件驱动的候补晋升）。基于角色的访问控制（学生 / 教师 / 教务 / 管理员）通过能力矩阵加行级校验来实现（例如，教师只能查看本人执教班级的名单）。
+- **语义与领域复杂度。** 课程目录是一个形式化的、版本化的注册表：课程条目按目录版本不可变，并携带**先修课程 DAG**，其完整性在每次变更时都会校验（环检测），并通过拓扑排序进行分析。选课请求会经过一套可组合的约束系统校验：先修课程覆盖、课表区间重叠冲突检测、每学期学分上限，以及重复/重修规则 —— 每一项都会产生机器可读的原因码。
 
-## 3. Deliverables & Plan
+## 3. 交付物与计划
 
-1. **Working codebase** (Python 3.11, FastAPI, SQLite, pytest): a REST API
-   plus a browser demo UI, organized into cleanly separated modules
-   (`domain / services / infrastructure / api`), with an automated test
-   suite covering policies, the FSM, RBAC, phase handover, batch
-   allocation, and waitlist promotion (~37 tests).
-2. **System Architecture & Complexity Report** (8–12 pages) following the
-   standardized submission template: component architecture (C4-style),
-   data models & formal JSON Schemas, FSM + sequence diagrams, a
-   complexity-management evaluation table, scaling/trade-off analysis, and
-   an end-to-end execution trace captured from a scripted demo.
-3. **Live demo** (for the bonus): a scripted scenario registering several
-   students through all three stages, demonstrating rejection reasons,
-   lottery allocation, and automatic waitlist promotion.
+1. **可运行的代码库**（Python 3.11、FastAPI、SQLite、pytest）：一套 REST API 加上浏览器演示界面，按清晰分离的模块组织（`domain / services / infrastructure / api`），并配备自动化测试套件，覆盖策略、状态机（FSM）、权限控制（RBAC）、阶段交接、批量分配与候补晋升（约 37 个测试）。
+2. **系统架构与复杂度报告**（8–12 页），遵循标准提交模板：组件架构（C4 风格）、数据模型与正式 JSON Schema、状态机与序列图、复杂度管理评估表、扩展性与权衡分析，以及从脚本化演示中捕获的端到端执行轨迹。
+3. **现场演示**（争取加分）：一个脚本化场景，让若干学生走完三个阶段，展示拒绝原因、抽签分配与自动候补晋升。
 
-## 4. Scope
+## 4. 范围界定
 
-The system models one active semester and in-memory point-to-point events;
-multi-semester registries, distributed event brokers, and real payment/
-integration with the university SIS are out of scope but discussed as
-future work in the report.
+本系统只对单个活动学期与进程内的点对点事件建模；多学期注册表、分布式事件代理，以及与学校教务系统（SIS）的真实对接/支付均不在范围内，但会在报告的未来工作中加以讨论。

@@ -60,13 +60,13 @@ class CatalogService:
             if creates_cycle(graph, pre, data["code"]):
                 raise DomainError(
                     "PREREQ_CYCLE",
-                    f"adding prerequisite '{pre}' to '{data['code']}' "
-                    f"would create a cycle in the curriculum DAG",
+                    f"为 '{data['code']}' 添加先修课 '{pre}' "
+                    f"会在课程先修 DAG 中形成环",
                 )
             if not repo.get_active_course(self.conn, pre) and pre != data["code"]:
                 raise DomainError(
                     "PREREQ_UNKNOWN",
-                    f"prerequisite course '{pre}' does not exist in the catalog",
+                    f"先修课程 '{pre}' 不存在于课程目录",
                 )
         course_id, version = repo.create_course_version(self.conn, data)
         self.bus.publish(EVT_CATALOG_VERSIONED, {
@@ -89,7 +89,7 @@ class CatalogService:
     def create_section(self, data: SectionIn) -> dict:
         if not repo.get_active_course(self.conn, data.course_code):
             raise DomainError("COURSE_UNKNOWN",
-                              f"unknown course '{data.course_code}'")
+                              f"课程 '{data.course_code}' 不存在")
         section_id = repo.create_section(self.conn, data.model_dump())
         return repo.get_section(self.conn, section_id)
 
@@ -111,7 +111,7 @@ class EnrollmentService:
         course = repo.get_active_course(self.conn, section["course_code"])
         if course is None:
             raise DomainError("COURSE_UNKNOWN",
-                              f"course '{section['course_code']}' not in catalog")
+                              f"课程 '{section['course_code']}' 不在课程目录中")
 
         completed: set[str] = set(user["completed_courses"])
 
@@ -181,13 +181,13 @@ class EnrollmentService:
         section = repo.get_section(self.conn, section_id)
         if section is None or section["semester"] != semester:
             raise DomainError("SECTION_UNKNOWN",
-                              f"section {section_id} not found in {semester}")
+                              f"在学期 {semester} 中找不到教学班 {section_id}")
         phase = Phase(repo.get_semester(self.conn, semester)["phase"])
         if phase not in (Phase.PRE_ENROLLMENT, Phase.ADD_DROP):
             raise DomainError(
                 "PHASE_LOCKED",
-                f"enrollment is locked during {phase.value}; "
-                f"seats are assigned by the allocation service")
+                f"当前阶段（{phase.value}）不允许直接选课；"
+                f"名额由批量分配服务产生")
 
         existing = repo.get_enrollment_by_student_section(
             self.conn, user["id"], section_id)
@@ -195,7 +195,7 @@ class EnrollmentService:
                 S.SUBMITTED.value, S.VALIDATED.value, S.ENROLLED.value,
                 S.WAITLISTED.value):
             raise DomainError("DUPLICATE_ENROLLMENT",
-                              "an active enrollment request already exists")
+                              "本学期已存在有效的选课请求")
 
         enr_id = repo.create_enrollment(
             self.conn, user["id"], section_id, semester, S.SUBMITTED.value)
@@ -209,7 +209,7 @@ class EnrollmentService:
             raise
 
         self._audit_and_publish(enr, S.VALIDATED, user["username"],
-                                "policies passed")
+                                "策略校验全部通过")
 
         if phase is Phase.PRE_ENROLLMENT:
             # capacity-blind wish; seats are assigned by the AllocationService
@@ -218,31 +218,31 @@ class EnrollmentService:
         # ADD_DROP: synchronous first-come-first-served
         if self._free_seats(section) > 0:
             self._audit_and_publish(repo.get_enrollment(self.conn, enr_id),
-                                    S.ENROLLED, user["username"], "seat assigned")
+                                    S.ENROLLED, user["username"], "名额已分配（先到先得）")
         else:
             seq = repo.next_waitlist_seq(self.conn, section_id)
             repo.update_enrollment_state(self.conn, enr_id,
                                          S.WAITLISTED.value, seq,
-                                         "section full, waitlisted")
+                                         "名额已满，进入候补队列")
             repo.append_audit(self.conn, enr_id, S.VALIDATED.value,
                               S.WAITLISTED.value, user["username"],
-                              "section full, waitlisted")
+                              "名额已满，进入候补队列")
         return self._view(repo.get_enrollment(self.conn, enr_id))
 
     def drop(self, user: dict, enrollment_id: int) -> dict:
         enr = repo.get_enrollment(self.conn, enrollment_id)
         if enr is None or enr["student_id"] != user["id"]:
             raise DomainError("ENROLLMENT_UNKNOWN",
-                              "enrollment not found for this student", 404)
+                              "找不到该学生的选课记录", 404)
         if S(enr["state"]) not in (S.ENROLLED, S.WAITLISTED, S.VALIDATED):
             raise DomainError("INVALID_STATE",
-                              f"cannot drop a {enr['state']} enrollment")
+                              f"当前状态（{enr['state']}）不允许退课")
 
         # FSM: ENROLLED -> DROPPED, pending states -> CANCELLED
         target = S.DROPPED if S(enr["state"]) == S.ENROLLED else S.CANCELLED
         was_enrolled = S(enr["state"]) == S.ENROLLED
         self._audit_and_publish(enr, target, user["username"],
-                                "student dropped")
+                                "学生发起退课")
         if was_enrolled:
             section = repo.get_section(self.conn, enr["section_id"])
             payload = {"section_id": section["id"],
@@ -273,7 +273,7 @@ class EnrollmentService:
     def roster(self, section_id: int) -> dict:
         section = repo.get_section(self.conn, section_id)
         if section is None:
-            raise DomainError("SECTION_UNKNOWN", f"section {section_id} not found", 404)
+            raise DomainError("SECTION_UNKNOWN", f"教学班 {section_id} 不存在", 404)
         students = []
         for e in repo.list_enrollments(self.conn, section_id=section_id):
             if e["state"] == S.ENROLLED.value:
@@ -325,7 +325,7 @@ class AllocationService:
         phase = Phase(repo.get_semester(self.conn, semester)["phase"])
         if phase is not Phase.ALLOCATION:
             raise DomainError("WRONG_PHASE",
-                              f"allocation requires phase ALLOCATION, got {phase.value}")
+                              f"批量分配要求阶段为 allocation，当前为 {phase.value}")
 
         rng = random.Random(seed)   # seeded => reproducible, auditable draw
         summary = {"seed": seed, "sections": {}}
@@ -341,16 +341,16 @@ class AllocationService:
                 if i < seats:
                     self.enroll._audit_and_publish(enr, S.ENROLLED,
                                                    "system:allocation",
-                                                   "allocated seat in lottery")
+                                                   "抽签分配到名额")
                     enrolled_n += 1
                 else:
                     seq = repo.next_waitlist_seq(self.conn, section["id"])
                     repo.update_enrollment_state(
                         self.conn, e["id"], S.WAITLISTED.value, seq,
-                        "lottery overflow, waitlisted")
+                        "抽签未中，进入候补队列")
                     repo.append_audit(self.conn, e["id"], S.VALIDATED.value,
                                       S.WAITLISTED.value, "system:allocation",
-                                      "lottery overflow, waitlisted")
+                                      "抽签未中，进入候补队列")
                     waitlisted_n += 1
             summary["sections"][f"{section['course_code']}.{section['section_no']}"] = {
                 "capacity": section["capacity"], "requests": len(pending),
@@ -371,19 +371,19 @@ class PhaseService:
         sem = repo.get_semester(self.conn, semester)
         if sem is None:
             raise DomainError("SEMESTER_UNKNOWN",
-                              f"semester {semester} not initialised", 404)
+                              f"学期 {semester} 未初始化", 404)
         return sem
 
     def advance(self, semester: str) -> dict:
         sem = repo.get_semester(self.conn, semester)
         if sem is None:
             raise DomainError("SEMESTER_UNKNOWN",
-                              f"semester {semester} not initialised", 404)
+                              f"学期 {semester} 未初始化", 404)
         current = Phase(sem["phase"])
         idx = PHASE_ORDER.index(current)
         if idx + 1 >= len(PHASE_ORDER):
             raise DomainError("PHASE_TERMINAL",
-                              f"semester already in terminal phase {current.value}")
+                              f"学期已处于终态阶段 {current.value}，无法继续推进")
         nxt = PHASE_ORDER[idx + 1]
 
         # ---- stage handover: snapshot context for the incoming stage -------

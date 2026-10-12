@@ -23,7 +23,7 @@ class PolicyResult:
 
     @classmethod
     def ok(cls) -> "PolicyResult":
-        return cls(True, "OK", "policy satisfied")
+        return cls(True, "OK", "校验通过")
 
     @classmethod
     def fail(cls, code: str, message: str) -> "PolicyResult":
@@ -42,8 +42,8 @@ def check_prerequisites(
     if missing:
         return PolicyResult.fail(
             "PREREQ_MISSING",
-            f"{course_code} requires prerequisite(s) {', '.join(missing)} "
-            f"which are not on the student transcript",
+            f"{course_code} 要求先修课程 {', '.join(missing)}，"
+            f"但成绩单中尚未通过",
         )
     return PolicyResult.ok()
 
@@ -61,14 +61,14 @@ def check_timetable(
     enrolled_labels: dict[int, str] | None = None,
 ) -> PolicyResult:
     labels = enrolled_labels or {}
-    for i, cand in enumerate(candidate_slots):
+    for cand in candidate_slots:
         for j, active in enumerate(enrolled_slots):
             if slots_overlap(cand, active):
                 return PolicyResult.fail(
                     "TIMETABLE_CONFLICT",
-                    f"candidate slot #{i} ({cand.day} {cand.start_min}-{cand.end_min}) "
-                    f"overlaps enrolled section '{labels.get(j, f'#{j}')}' "
-                    f"({active.day} {active.start_min}-{active.end_min})",
+                    f"所选时段（周{cand.day} {cand.start_min}-{cand.end_min}）"
+                    f"与已选课程 '{labels.get(j, f'#{j}')}' "
+                    f"（周{active.day} {active.start_min}-{active.end_min}）时间冲突",
                 )
     return PolicyResult.ok()
 
@@ -85,8 +85,7 @@ def check_credit_limit(
     if total > max_credits:
         return PolicyResult.fail(
             "CREDIT_LIMIT",
-            f"enrolling would raise semester load to {total:g} credits, "
-            f"exceeding the limit of {max_credits}",
+            f"选课后学期总学分将达到 {total:g}，超过上限 {max_credits} 学分",
         )
     return PolicyResult.ok()
 
@@ -102,11 +101,11 @@ def check_duplicate(
     if course_code in active_course_codes:
         return PolicyResult.fail(
             "DUPLICATE_ENROLLMENT",
-            f"already enrolled or waitlisted in {course_code} this semester",
+            f"本学期已选或已候补 {course_code}，不能重复选课",
         )
     if course_code in completed:
         return PolicyResult.fail(
             "ALREADY_PASSED",
-            f"{course_code} was already passed; re-taking is not allowed",
+            f"{course_code} 已通过，不允许重修选课",
         )
     return PolicyResult.ok()

@@ -58,10 +58,10 @@ class WaitlistEngine:
                 # head no longer eligible: expire it and keep scanning
                 svc._audit_and_publish(
                     head, S.EXPIRED, "system:waitlist",
-                    f"promotion failed: {exc.code}: {exc.message}")
+                    f"候补晋升失败：{exc.code}：{exc.message}")
                 continue
             svc._audit_and_publish(
-                head, S.ENROLLED, "system:waitlist", "promoted from waitlist")
+                head, S.ENROLLED, "system:waitlist", "从候补队列晋升")
             payload = {"enrollment_id": head["id"], "section_id": section_id,
                        "student_id": head["student_id"]}
             repo.append_event(conn, EVT_WAITLIST_PROMOTED, payload)

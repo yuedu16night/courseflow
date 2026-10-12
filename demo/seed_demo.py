@@ -1,7 +1,9 @@
 """End-to-end demo: seeds a realistic semester and walks a scripted
 scenario through the public REST API, printing a human-readable trace.
 
-Run:  python demo/seed_demo.py
+Run:  python demo/seed_demo.py [db_path] [--seed-only]
+      --seed-only populates users/transcripts/courses/sections and leaves the
+      semester in pre_enrollment (ideal before starting the live server).
 Output: console + docs/demo_trace.md (execution evidence for the report)
 
 Cast:
@@ -42,15 +44,18 @@ def tok(client: TestClient, username: str) -> str:
     return r.json()["token"]
 
 
-def main() -> None:
-    if DB.exists():
-        DB.unlink()
-    app = create_app(DB)
+def main(db_path: Path | None = None, seed_only: bool = False) -> None:
+    db_path = db_path or DB
+    if db_path.exists():
+        db_path.unlink()
+    app = create_app(db_path)
     client = TestClient(app)
 
-    say("# CourseFlow — End-to-End Execution Trace")
+    say("# CourseFlow — End-to-End Execution Trace"
+        if not seed_only else "# CourseFlow — Seed Summary")
     say()
-    say("Scripted demo executed against the REST API by `demo/seed_demo.py`.")
+    say("Scripted demo executed against the REST API by `demo/seed_demo.py`."
+        if not seed_only else f"Database `{db_path.name}` seeded; semester in pre_enrollment.")
     say()
 
     def call(method, path, token=None, label=None, expect=200, **kw):
@@ -121,6 +126,8 @@ def main() -> None:
                    "slots": [{"day": 2, "start_min": 510, "end_min": 650}]})
     S2 = r.json()["id"]
     say()
+    if seed_only:
+        return
 
     # ------------------------------------------------ semantic guards ----
     say("## 2. Semantic constraint enforcement (phase = pre_enrollment)")
@@ -221,7 +228,11 @@ def _alice_enr(client, section_id):
 
 
 if __name__ == "__main__":
-    main()
-    TRACE.parent.mkdir(exist_ok=True)
-    TRACE.write_text("\n".join(out_lines), encoding="utf-8")
-    print(f"\ntrace written to {TRACE}")
+    cli_paths = [a for a in sys.argv[1:] if not a.startswith("--")]
+    cli_seed_only = "--seed-only" in sys.argv
+    cli_db = Path(cli_paths[0]).resolve() if cli_paths else None
+    main(cli_db, cli_seed_only)
+    if not cli_seed_only:
+        TRACE.parent.mkdir(exist_ok=True)
+        TRACE.write_text("\n".join(out_lines), encoding="utf-8")
+        print(f"\ntrace written to {TRACE}")

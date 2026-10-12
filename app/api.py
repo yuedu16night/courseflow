@@ -38,7 +38,7 @@ def current_user(request: Request, conn=Depends(get_conn)):
     token = auth.removeprefix("Bearer ").strip()
     user = repo.get_session_user(conn, token) if token else None
     if user is None:
-        raise HTTPException(401, "missing or invalid token")
+        raise HTTPException(401, "缺少或无效的访问令牌")
     return user
 
 
@@ -46,7 +46,7 @@ def require(capability: str):
     def guard(user=Depends(current_user)):
         if not role_has(user["role"], capability):
             raise HTTPException(
-                403, f"role '{user['role']}' lacks capability '{capability}'")
+                403, f"角色 {user['role']} 无权执行该操作（缺少能力 {capability}）")
         return user
     return guard
 
@@ -67,7 +67,7 @@ def login(body: LoginIn, conn=Depends(get_conn)):
         "SELECT * FROM users WHERE username=?", (body.username,)
     ).fetchone()
     if row is None or not repo.verify_password(body.password, row["password_hash"]):
-        raise HTTPException(401, "invalid credentials")
+        raise HTTPException(401, "用户名或密码错误")
     token = repo.create_session(conn, row["id"])
     return {"token": token, "role": row["role"], "full_name": row["full_name"]}
 
@@ -85,7 +85,7 @@ def me(user=Depends(current_user)):
 def create_user(body: UserIn, conn=Depends(get_conn),
                 _=Depends(require("user:write"))):
     if repo.get_user_by_username(conn, body.username):
-        raise HTTPException(409, "username already exists")
+        raise HTTPException(409, "用户名已存在")
     uid = repo.create_user(conn, body.username, body.password, body.full_name,
                            body.role, body.major, body.max_credits)
     return {"id": uid, "username": body.username, "role": body.role}
@@ -145,12 +145,12 @@ def roster(section_id: int, request: Request, conn=Depends(get_conn),
            user=Depends(current_user)):
     section = repo.get_section(conn, section_id)
     if section is None:
-        raise HTTPException(404, "section not found")
+        raise HTTPException(404, "教学班不存在")
     if user["role"] == Role.INSTRUCTOR.value:
         if section["instructor_name"] != user["full_name"]:
-            raise HTTPException(403, "instructors may only view their own rosters")
+            raise HTTPException(403, "教师只能查看自己执教班级的名单")
     elif not role_has(user["role"], "roster:read_any"):
-        raise HTTPException(403, f"role '{user['role']}' lacks roster access")
+        raise HTTPException(403, f"角色 {user['role']} 无权查看名单")
     try:
         return EnrollmentService(conn, request.app.state.bus).roster(section_id)
     except DomainError as e:
