@@ -51,11 +51,11 @@ def main(db_path: Path | None = None, seed_only: bool = False) -> None:
     app = create_app(db_path)
     client = TestClient(app)
 
-    say("# CourseFlow — End-to-End Execution Trace"
-        if not seed_only else "# CourseFlow — Seed Summary")
+    say("# CourseFlow — 端到端执行轨迹"
+        if not seed_only else "# CourseFlow — 数据初始化摘要")
     say()
-    say("Scripted demo executed against the REST API by `demo/seed_demo.py`."
-        if not seed_only else f"Database `{db_path.name}` seeded; semester in pre_enrollment.")
+    say("由 `demo/seed_demo.py` 针对 REST API 执行的脚本化演示。"
+        if not seed_only else f"数据库 `{db_path.name}` 已初始化；学期处于 pre_enrollment 阶段。")
     say()
 
     def call(method, path, token=None, label=None, expect=200, **kw):
@@ -64,25 +64,25 @@ def main(db_path: Path | None = None, seed_only: bool = False) -> None:
         tag = label or f"{method.upper()} {path}"
         icon = "OK" if r.status_code == expect else "!!"
         say(f"- `{icon} {tag}` → HTTP {r.status_code}"
-            + ("" if r.status_code == expect else f" (expected {expect})"))
+            + ("" if r.status_code == expect else f"（预期 {expect}）"))
         if r.status_code != expect:
             say(f"    - body: {r.json()}")
         return r
 
     # ---------------------------------------------------------- setup ----
-    say("## 0. Bootstrap")
+    say("## 0. 引导启动")
     reg = tok(client, "registrar")
     adm = tok(client, "admin")
-    say("- app factory created default accounts; registrar & admin sessions issued")
+    say("- 应用工厂创建默认账号；已签发 registrar 与 admin 会话")
     say()
 
-    say("## 1. Seed: users, catalog (prerequisite DAG), sections")
+    say("## 1. 数据初始化：用户、课程目录（先修课程 DAG）、教学班")
     names = {"alice": "Alice Wang", "bob": "Bob Li", "charlie": "Charlie Zhao",
              "dave": "Dave Qian", "erin": "Erin Sun", "carol": "Carol Chen"}
     for name, role in [("alice", "student"), ("bob", "student"),
                        ("charlie", "student"), ("dave", "student"),
                        ("erin", "student"), ("carol", "instructor")]:
-        call("post", "/users", adm, f"create user {name} ({role})",
+        call("post", "/users", adm, f"创建用户 {name}（{role}）",
              json={"username": name, "password": name + "123",
                    "full_name": names[name], "role": role})
     # transcripts (in a real deployment: imported from the SIS)
@@ -97,7 +97,7 @@ def main(db_path: Path | None = None, seed_only: bool = False) -> None:
             repo.set_completed_courses(conn, u["id"], done)
     finally:
         conn.close()
-    say("- transcripts loaded (SIS import)")
+    say("- 成绩单已载入（SIS 导入）")
 
     for c in [
         {"code": "CS101", "title": "Intro to Programming", "credits": 3,
@@ -109,17 +109,17 @@ def main(db_path: Path | None = None, seed_only: bool = False) -> None:
         {"code": "EE210", "title": "Circuit Theory", "credits": 3,
          "department": "Electrical Engineering", "prerequisites": ["MATH101"]},
     ]:
-        call("post", "/courses", reg, f"course {c['code']}", json=c)
+        call("post", "/courses", reg, f"课程 {c['code']}", json=c)
 
     r = call("post", "/sections", reg,
-             "section CS201.01 (cap 2, Mon 08:30-10:10, Carol Chen)",
+             "教学班 CS201.01（容量 2，周一 08:30-10:10，Carol Chen）",
              json={"course_code": "CS201", "semester": "2026FA",
                    "section_no": "01", "instructor_name": "Carol Chen",
                    "capacity": 2, "venue": "SE-101",
                    "slots": [{"day": 1, "start_min": 510, "end_min": 650}]})
     S1 = r.json()["id"]
     r = call("post", "/sections", reg,
-             "section EE210.01 (cap 1, Tue 08:30-10:10, Dan Wu)",
+             "教学班 EE210.01（容量 1，周二 08:30-10:10，Dan Wu）",
              json={"course_code": "EE210", "semester": "2026FA",
                    "section_no": "01", "instructor_name": "Dan Wu",
                    "capacity": 1, "venue": "EE-201",
@@ -130,89 +130,89 @@ def main(db_path: Path | None = None, seed_only: bool = False) -> None:
         return
 
     # ------------------------------------------------ semantic guards ----
-    say("## 2. Semantic constraint enforcement (phase = pre_enrollment)")
+    say("## 2. 语义约束校验（phase = pre_enrollment）")
     call("post", "/enrollments", tok(client, "dave"),
-         "dave requests CS201.01", expect=400, json={"section_id": S1})
-    say("    - REJECTED: PREREQ_MISSING (dave has no CS101) — DAG policy")
+         "dave 申请 CS201.01", expect=400, json={"section_id": S1})
+    say("    - REJECTED: PREREQ_MISSING（dave 未通过 CS101）—— 先修 DAG 策略")
     call("post", "/enrollments", tok(client, "alice"),
-         "alice wishes CS201.01", json={"section_id": S1})
-    say("    - wish stored as VALIDATED (capacity-blind in this stage)")
-    call("post", "/courses", reg, "add cycle edge CS201 -> CS101", expect=400,
+         "alice 填报志愿 CS201.01", json={"section_id": S1})
+    say("    - 志愿以 VALIDATED 存储（本阶段不计容量）")
+    call("post", "/courses", reg, "添加环边 CS201 -> CS101", expect=400,
          json={"code": "CS101", "title": "Bad", "credits": 3,
                "department": "CS", "prerequisites": ["CS201"]})
-    say("    - REJECTED: PREREQ_CYCLE — catalog graph integrity preserved")
-    r = call("post", "/courses", reg, "edit CS101 -> immutable version 2",
+    say("    - REJECTED: PREREQ_CYCLE —— 课程目录图完整性得以保持")
+    r = call("post", "/courses", reg, "修改 CS101 -> 生成不可变版本 2",
              json={"code": "CS101", "title": "Intro to Programming (Python)",
                    "credits": 3, "department": "Computer Science",
                    "prerequisites": []})
-    say(f"    - CS101 now at catalog_version {r.json()['catalog_version']}")
+    say(f"    - CS101 现处于 catalog_version {r.json()['catalog_version']}")
     say()
 
     # ------------------------------------------------- stage handover ----
-    say("## 3. Multi-stage orchestration: pre_enrollment → allocation")
+    say("## 3. 多阶段编排：pre_enrollment → allocation")
     for who in ["bob", "charlie"]:
         call("post", "/enrollments", tok(client, who),
-             f"{who} wishes CS201.01", json={"section_id": S1})
-    r = call("post", "/admin/phase/advance", reg, "advance phase")
+             f"{who} 填报志愿 CS201.01", json={"section_id": S1})
+    r = call("post", "/admin/phase/advance", reg, "推进阶段")
     snap = r.json()["handover_context"]["sections"]["CS201.01"]
-    say(f"    - phase → {r.json()['phase']}; handover snapshot: {snap}")
+    say(f"    - phase → {r.json()['phase']}；交接快照：{snap}")
     call("post", "/enrollments", tok(client, "erin"),
-         "enroll while in ALLOCATION", expect=400, json={"section_id": S1})
-    say("    - REJECTED: PHASE_LOCKED — behavior is stage-scoped")
+         "在 ALLOCATION 阶段直接选课", expect=400, json={"section_id": S1})
+    say("    - REJECTED: PHASE_LOCKED —— 行为受阶段约束")
     r = call("post", "/admin/allocation/run?seed=42", reg,
-             "registrar runs seeded batch allocation")
-    say(f"    - allocation result: {r.json()['sections']}")
+             "教务运行带种子的批量分配")
+    say(f"    - 分配结果：{r.json()['sections']}")
     say()
 
     # ------------------------------------------------------ add/drop ----
-    say("## 4. add_drop: FCFS + event-driven waitlist promotion")
-    call("post", "/admin/phase/advance", reg, "advance phase → add_drop")
+    say("## 4. add_drop：先到先得 + 事件驱动的候补晋升")
+    call("post", "/admin/phase/advance", reg, "推进阶段 → add_drop")
     r = call("post", "/enrollments", tok(client, "bob"),
-             "bob requests EE210.01 (cap 1)", json={"section_id": S2})
+             "bob 申请 EE210.01（容量 1）", json={"section_id": S2})
     say(f"    - state: {r.json()['state']}")
     r = call("post", "/enrollments", tok(client, "alice"),
-             "alice requests EE210.01 — full", json={"section_id": S2})
+             "alice 申请 EE210.01 —— 已满", json={"section_id": S2})
     say(f"    - state: {r.json()['state']} (waitlist_seq={r.json()['waitlist_seq']})")
     r = call("post", "/enrollments", tok(client, "erin"),
-             "erin requests EE210.01 — full", json={"section_id": S2})
+             "erin 申请 EE210.01 —— 已满", json={"section_id": S2})
     say(f"    - state: {r.json()['state']} (waitlist_seq={r.json()['waitlist_seq']})")
     call("post", "/enrollments", tok(client, "charlie"),
-         "charlie requests EE210.01", expect=400, json={"section_id": S2})
-    say("    - REJECTED: PREREQ_MISSING (charlie lacks MATH101)")
+         "charlie 申请 EE210.01", expect=400, json={"section_id": S2})
+    say("    - REJECTED: PREREQ_MISSING（charlie 缺少 MATH101）")
 
     r = call("post", f"/enrollments/{{alice_enr}}/drop".replace(
         "{alice_enr}", str(_alice_enr(client, S2))), tok(client, "alice"),
-        "alice drops EE210.01")
-    say("    - seat released → event `section.seat_released` published")
+        "alice 退课 EE210.01")
+    say("    - 席位释放 → 发布事件 `section.seat_released`")
     alice_now = client.get("/api/enrollments/me",
                            headers={"Authorization": f"Bearer {tok(client, 'alice')}"}
                            ).json()
-    say(f"    - alice re-checked: {alice_now[-1]['state']} — FIFO head was herself, "
-        "no promotion needed")
+    say(f"    - 复查 alice：{alice_now[-1]['state']} —— FIFO 队首正是她本人，"
+        "无需晋升")
     # bob (ENROLLED) drops instead: promotion of the new FIFO head (erin)
     bob_enr = _find(client, tok(client, "bob"), S2)
     call("post", f"/enrollments/{bob_enr}/drop", tok(client, "bob"),
-         "bob drops EE210.01")
-    say("    - event `section.seat_released` → WaitlistEngine promotes erin")
+         "bob 退课 EE210.01")
+    say("    - 事件 `section.seat_released` → WaitlistEngine 晋升 erin")
     erin_now = client.get("/api/enrollments/me",
                           headers={"Authorization": f"Bearer {tok(client, 'erin')}"}
                           ).json()
     e_row = next(e for e in erin_now if e["section_id"] == S2)
-    say(f"    - erin: WAITLISTED → {e_row['state']} (zero polling, event-driven)")
-    call("post", "/admin/phase/advance", reg, "advance phase → closed")
-    say("    - semester CLOSED: enrollment frozen; audit trail immutable")
+    say(f"    - erin：WAITLISTED → {e_row['state']}（零轮询，事件驱动）")
+    call("post", "/admin/phase/advance", reg, "推进阶段 → closed")
+    say("    - 学期 CLOSED：选课冻结；审计轨迹不可变")
     say()
 
-    say("## 5. Observability: audit chain & event log")
+    say("## 5. 可观测性：审计链与事件日志")
     audit = client.get(f"/api/admin/audit?enrollment_id={e_row['id']}",
                        headers={"Authorization": f"Bearer {reg}"}).json()
-    say(f"- enrollment #{e_row['id']} (erin → EE210.01) lifecycle:")
+    say(f"- 选课 #{e_row['id']}（erin → EE210.01）生命周期：")
     for a in audit:
         say(f"    - {a['from_state'] or '∅'} → **{a['to_state']}** by {a['actor']}"
             + (f" ({a['reason']})" if a["reason"] else ""))
     events = client.get("/api/admin/events",
                         headers={"Authorization": f"Bearer {reg}"}).json()
-    say(f"- event log: {len(events)} events recorded, types: "
+    say(f"- 事件日志：共记录 {len(events)} 条事件，类型："
         f"{sorted({e['type'] for e in events})}")
 
 

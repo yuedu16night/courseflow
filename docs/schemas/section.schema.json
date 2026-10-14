@@ -1,24 +1,24 @@
 {
   "$defs": {
     "ScheduleSlot": {
-      "description": "One weekly meeting occurrence of a section.\n\n`day` uses ISO order: 1=Monday ... 7=Sunday. Times are minutes\nsince midnight, e.g. 08:30 -> 510.",
+      "description": "教学班每周一次的上课安排。\n\n`day` 采用 ISO 顺序：1=周一 …… 7=周日。时间以自午夜起的分钟数表示，例如 08:30 -> 510。",
       "properties": {
         "day": {
           "maximum": 7,
           "minimum": 1,
-          "title": "Day",
+          "title": "星期",
           "type": "integer"
         },
         "start_min": {
           "maximum": 1440,
           "minimum": 0,
-          "title": "Start Min",
+          "title": "开始分钟",
           "type": "integer"
         },
         "end_min": {
           "exclusiveMinimum": 0,
           "maximum": 1440,
-          "title": "End Min",
+          "title": "结束分钟",
           "type": "integer"
         }
       },
@@ -33,32 +33,32 @@
   },
   "properties": {
     "course_code": {
-      "title": "Course Code",
+      "title": "课程代码",
       "type": "string"
     },
     "semester": {
       "pattern": "^\\d{4}(SP|FA|SU)$",
-      "title": "Semester",
+      "title": "学期",
       "type": "string"
     },
     "section_no": {
       "maxLength": 8,
       "minLength": 1,
-      "title": "Section No",
+      "title": "教学班编号",
       "type": "string"
     },
     "instructor_name": {
-      "title": "Instructor Name",
+      "title": "授课教师",
       "type": "string"
     },
     "capacity": {
       "maximum": 500,
       "minimum": 1,
-      "title": "Capacity",
+      "title": "容量",
       "type": "integer"
     },
     "venue": {
-      "title": "Venue",
+      "title": "上课地点",
       "type": "string"
     },
     "slots": {
@@ -66,7 +66,7 @@
         "$ref": "#/$defs/ScheduleSlot"
       },
       "minItems": 1,
-      "title": "Slots",
+      "title": "时间段",
       "type": "array"
     }
   },

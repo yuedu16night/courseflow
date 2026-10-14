@@ -1,41 +1,41 @@
 {
-  "description": "Catalog entry. Creating a course with an existing `code`\nproduces a NEW catalog version (immutability + versioning).",
+  "description": "课程目录条目。使用已存在的 `code` 创建课程会生成一个新的目录版本（不可变 + 版本化）。",
   "properties": {
     "code": {
       "maxLength": 16,
       "minLength": 2,
       "pattern": "^[A-Z]{2,4}[0-9]{2,4}$",
-      "title": "Code",
+      "title": "课程代码",
       "type": "string"
     },
     "title": {
       "maxLength": 128,
       "minLength": 2,
-      "title": "Title",
+      "title": "课程名称",
       "type": "string"
     },
     "credits": {
       "maximum": 12,
       "minimum": 0.5,
-      "title": "Credits",
+      "title": "学分",
       "type": "number"
     },
     "department": {
       "maxLength": 64,
       "minLength": 2,
-      "title": "Department",
+      "title": "开课院系",
       "type": "string"
     },
     "prerequisites": {
       "items": {
         "type": "string"
       },
-      "title": "Prerequisites",
+      "title": "先修课程",
       "type": "array"
     },
     "description": {
       "default": "",
-      "title": "Description",
+      "title": "课程简介",
       "type": "string"
     }
   },

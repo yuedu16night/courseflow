@@ -1,111 +1,76 @@
-# CourseFlow — Course Registration & Timetable Orchestration System
+# CourseFlow — 选课与排课编排系统
 
-MAiNS (Models and Algorithms in Networks and Systems) course project,
-Track Option 4 (self-defined). CourseFlow manages the full lifecycle of
-course enrollment requests across a semester's three registration stages,
-with an explicit enrollment FSM, a staged semester pipeline with handover
-snapshots, event-driven waitlist promotion, capability-based RBAC, and a
-versioned course catalog protected by prerequisite-DAG integrity checks.
+MAiNS（网络与系统中的模型与算法）课程项目，类型 4 —— 自定义项目。CourseFlow 管理选课日历各阶段中选课申请的全生命周期，具备显式的选课有限状态机、带交接快照的分阶段学期流水线、事件驱动的候补晋升、基于能力矩阵的 RBAC，以及受先修课程 DAG 完整性校验保护的版本化课程目录。
 
-- Full architecture write-up: [`docs/report.md`](docs/report.md)
-- Instructor proposal: [`docs/proposal.md`](docs/proposal.md)
-- Scripted execution trace: [`docs/demo_trace.md`](docs/demo_trace.md)
-- Formal data schemas: `docs/schemas/*.schema.json`
+- 完整架构说明：[`docs/report.md`](docs/report.md)
+- 项目提案（提交指导教师）：[`docs/proposal.md`](docs/proposal.md)
+- 脚本化执行轨迹：[`docs/demo_trace.md`](docs/demo_trace.md)
+- 正式数据 Schema：`docs/schemas/*.schema.json`
 
-## Quick start
+## 快速开始
 
 ```bash
 pip install -r requirements.txt
 
-python run.py                  # API + demo UI at http://127.0.0.1:8000
-python demo/seed_demo.py       # scripted end-to-end scenario (prints trace)
-python -m pytest tests -q      # 73 automated tests (incl. the agent layer)
+python run.py                  # 在 http://127.0.0.1:8000 提供 API 与演示界面
+python demo/seed_demo.py       # 脚本化端到端场景（打印执行轨迹）
+python -m pytest tests -q      # 73 个自动化测试（含智能体层）
 ```
 
-Open http://127.0.0.1:8000 in a browser and sign in:
+在浏览器中打开 http://127.0.0.1:8000 并登录：
 
-| account | password | role |
+| 账号 | 密码 | 角色 |
 |---|---|---|
-| registrar | reg123 | registrar (phases, allocation, catalog) |
-| admin | admin123 | admin (users, audit) |
-| alice / bob / charlie / dave / erin | `<name>123` | students |
+| registrar | reg123 | registrar（阶段推进、分配、课程目录） |
+| admin | admin123 | admin（用户、审计） |
+| alice / bob / charlie / dave / erin | `<name>123` | 学生 |
 
-Demo flow to showcase: sign in as `registrar` → seed the catalog (or run
-`python demo/seed_demo.py` first for a pre-populated semester) → sign in
-as students and submit requests → advance phases → run the batch
-allocation → drop a section as a student and watch the waitlist
-auto-promote → inspect the audit trail and event log. Students also get a
-**智能选课助手** tab (see "Agent layer" below).
+推荐演示流程：以 `registrar` 身份登录 → 写入课程目录（或先运行 `python demo/seed_demo.py` 得到一个已初始化的学期）→ 以学生身份登录并提交选课请求 → 推进阶段 → 运行批量分配 → 学生退掉一个教学班并观察候补队列自动晋升 → 查看审计轨迹与事件日志。学生还会看到一个**智能选课助手**标签页（见下文「智能体层」）。
 
-## Agent layer (optional)
+## 智能体层（可选）
 
-Two composable components sit *above* the service layer, alongside the
-browser UI — they reuse the services rather than reimplementing them:
+两个可组合的组件位于服务层*之上*，与浏览器界面并列——它们复用既有服务，而非重新实现：
 
-- **Scheme A — `PlannerAgent` (`app/agent/planner.py`)**: turns the
-  system's *single-request validation* into *multi-course combination
-  search*. It enumerates feasible course sets under the prerequisite DAG,
-  timetable-overlap, credit-ceiling and duplicate/retake constraints, ranks
-  them deterministically, and explains every choice (and every exclusion)
-  with the same machine-readable reason codes the policy chain uses.
-  Read-only, reproducible, fully unit-tested.
-- **Scheme B — orchestration (`app/agent/tools.py`, `llm.py`,
-  `orchestrator.py`)**: exposes the existing use-cases as LLM tools
-  (function calling) so the system can be driven in natural language. The
-  LLM only decides *which* tools to call; all planning comes from scheme A
-  and all validation from the existing policy chain.
+- **方案 A —— `PlannerAgent`（`app/agent/planner.py`）**：把系统的*单次请求校验*扩展为*多课程组合搜索*。它在先修课程 DAG、课表重叠、学分上限以及重复/重修等约束下枚举可行的课程集合，对其进行确定性排序，并用与策略链相同的机器可读原因码解释每一项选择（以及每一项排除）。只读、可复现、具备完整单元测试。
+- **方案 B —— 编排（`app/agent/tools.py`、`llm.py`、`orchestrator.py`）**：把既有用例暴露为供 LLM 调用的工具（函数调用），使系统可以用自然语言驱动。LLM 只负责决定*调用哪些*工具；所有规划都来自方案 A，所有校验都来自既有的策略链。
 
-Default credentials and the LLM are independent: **scheme B runs in a
-deterministic offline rule mode unless an API key is configured**, so the
-system works with no network at all.
+LLM 通道与系统默认配置相互独立：**除非配置了 API 密钥，方案 B 运行在确定性的离线规则模式下**，因此系统在完全无网络时也能工作。
 
 ```bash
-# Optional: enable the LLM orchestration path (any OpenAI-compatible gateway)
-export AGENT_LLM_BASE_URL=https://api.deepseek.com/v1   # or DashScope / Zhipu / local Ollama
-export AGENT_LLM_API_KEY=sk-...                         # keep out of git (see .gitignore)
+# 可选：启用 LLM 编排通道（任意 OpenAI 兼容网关）
+export AGENT_LLM_BASE_URL=https://api.deepseek.com/v1   # 也可用 DashScope / 智谱 / 本地 Ollama
+export AGENT_LLM_API_KEY=sk-...                         # 不要提交到 git（见 .gitignore）
 export AGENT_LLM_MODEL=deepseek-chat
 ```
 
-The LLM path has been verified against a live DeepSeek endpoint end to end
-(intent parsing, tool calls, write proposal, confirm-and-execute). The
-system prompt carries two constraints that a real model otherwise gets
-wrong: it must *actually call* the write tool rather than merely describing
-a proposal in prose (a described proposal produces no confirmation button),
-and an explicit "帮我选 X" must produce the proposal directly instead of
-re-asking for permission first.
+LLM 路径已针对在线的 DeepSeek 端点做过端到端验证（意图解析、工具调用、写入提议、确认并执行）。系统提示词携带两条约束，这两点真实模型往往做不对：必须*真正调用*写入工具，而不是仅在文字里描述一个提议（只描述提议不会产生确认按钮）；以及当用户明确说「帮我选 X」时，应直接给出提议，而不是先反问是否获得许可。
 
-Two invariants hold regardless of mode:
+无论运行在哪种模式下，以下两条不变式都成立：
 
-1. **Write operations are never executed by the agent.** `submit_enrollment`
-   / `drop_enrollment` only produce a *pending proposal*; the user must
-   confirm it, and the confirmed action is then executed through the normal
-   REST endpoint — so the constraint policy chain and RBAC always apply.
-2. **The agent acts as the signed-in user.** Every tool call runs under the
-   caller's identity, so row-level permissions hold (a student agent cannot
-   see another student's data) and every turn is appended to the audit
-   `event_log` as `agent.turn`.
+1. **写操作从不由智能体直接执行。** `submit_enrollment` / `drop_enrollment` 只产生一个*待确认提议*；必须由用户确认，确认后的动作再经由常规 REST 端点执行——因此约束策略链与 RBAC 始终生效。
+2. **智能体始终以登录用户的身份行动。** 每次工具调用都在调用者的身份下运行，因此行级权限成立（学生智能体无法看到其他学生的数据），且每个回合都会以 `agent.turn` 追加到审计 `event_log`。
 
-## Architecture at a glance
+## 架构一览
 
 ```text
-Consumers (parallel):  Browser UI  ·  Agent layer (planner + LLM orchestrator)
-                                │            │  tools only, never raw SQL
-                                ▼            ▼
-API layer (thin REST + RBAC guards)
+消费者（并列）：浏览器界面  ·  智能体层（规划器 + LLM 编排器）
+                   │            │ 仅调用工具，绝不直接写 SQL
+                   ▼            ▼
+REST 接口层（薄层：REST 映射 + RBAC 守卫）
         │
-Control plane:  CatalogService · EnrollmentService · AllocationService · PhaseService
-        │                              │ publishes events
-Pure domain:    state_machine (FSM) · policies (prereq DAG / timetable / credit / duplicate) · graph
+控制平面：CatalogService · EnrollmentService · AllocationService · PhaseService
+        │                              │ 发布事件
+纯领域层：state_machine（状态机）· policies（先修 DAG / 课表 / 学分 / 重复）· graph
         │                              ▼
-Data plane:     EventBus ──► WaitlistEngine (auto-promotion)
+数据平面：EventBus ──► WaitlistEngine（自动晋升）
         │
-Repository (single SQL module) ──► SQLite (+ append-only audit & event logs)
+仓储层（唯一 SQL 模块）──► SQLite（含只追加的审计与事件日志）
 ```
 
-## Complexity dimensions addressed
+## 覆盖的复杂度维度
 
-| Dimension | Where |
+| 维度 | 体现位置 |
 |---|---|
-| Structural | 4-layer separation; single SQL seam; pure domain modules; event bus; agent layer as a second consumer of the same service API |
-| Behavioral | Enrollment FSM + audit; 4-stage semester machine with handover snapshots; FCFS/lottery/waitlist stage behaviors; capability-matrix RBAC; agent turns in the audit log; propose→confirm→execute write protocol |
-| Semantic | Versioned immutable catalog; prerequisite DAG (cycle detection + topological order); formal JSON Schemas; policy chain with reason codes; constraint-satisfying combination search (PlannerAgent) |
+| 结构 | 四层分离；单一 SQL 接缝；纯领域模块；事件总线；智能体层作为同一服务 API 的第二个消费者 |
+| 行为 | 选课有限状态机 + 审计；带交接快照的四阶段学期状态机；FCFS/抽签/候补各阶段行为；基于能力矩阵的 RBAC；审计日志中的智能体回合；提议→确认→执行的写入协议 |
+| 语义 | 版本化不可变课程目录；先修课程 DAG（环检测 + 拓扑序）；正式的 JSON Schema；带原因码的策略链；满足约束的组合搜索（PlannerAgent） |
