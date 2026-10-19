@@ -18,19 +18,23 @@ from app.models import (
     AgentChatIn,
     AgentPlanIn,
     CourseIn,
+    DegreeRequirementIn,
     EnrollmentIn,
     LoginIn,
     SectionIn,
+    TimetablePlanIn,
     UserIn,
 )
 from app.rbac import role_has
-from app.runtime import CURRENT_SEMESTER
 from app.services import (
     AllocationService,
     CatalogService,
+    DegreeService,
     DomainError,
     EnrollmentService,
     PhaseService,
+    SemesterService,
+    TimetableService,
 )
 
 
@@ -85,9 +89,13 @@ def login(body: LoginIn, conn=Depends(get_conn)):
 
 
 @api.get("/auth/me")
-def me(user=Depends(current_user)):
+def me(user=Depends(current_user), conn=Depends(get_conn)):
+    code = repo.get_current_semester(conn)
+    sem = repo.get_semester(conn, code) or {}
     return {"username": user["username"], "role": user["role"],
-            "full_name": user["full_name"], "major": user["major"]}
+            "full_name": user["full_name"], "major": user["major"],
+            "grade": user.get("grade"), "semester": code,
+            "phase": sem.get("phase")}
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +107,8 @@ def create_user(body: UserIn, conn=Depends(get_conn),
     if repo.get_user_by_username(conn, body.username):
         raise HTTPException(409, "用户名已存在")
     uid = repo.create_user(conn, body.username, body.password, body.full_name,
-                           body.role, body.major, body.max_credits)
+                           body.role, body.major, body.max_credits,
+                           grade=body.grade)
     return {"id": uid, "username": body.username, "role": body.role}
 
 
@@ -140,7 +149,14 @@ def create_course(body: CourseIn, request: Request, conn=Depends(get_conn),
 def list_sections(semester: str | None = None, course_code: str | None = None,
                   conn=Depends(get_conn), _=Depends(require("catalog:read"))):
     return CatalogService(conn, None).list_sections(
-        semester or CURRENT_SEMESTER, course_code)
+        semester or repo.get_current_semester(conn), course_code)
+
+
+@api.get("/sections/eligible")
+def eligible_sections(request: Request, conn=Depends(get_conn),
+                      user=Depends(require("enroll:create"))):
+    """该学生此刻可选的教学班：先修满足、未通过、未在选、有余额。"""
+    return EnrollmentService(conn, request.app.state.bus).eligible_sections(user)
 
 
 @api.post("/sections")
@@ -202,14 +218,64 @@ def my_enrollments(request: Request, conn=Depends(get_conn),
 def all_enrollments(semester: str | None = None, conn=Depends(get_conn),
                     _=Depends(require("enroll:read_all"))):
     return EnrollmentService(conn, None).all_enrollments(
-        semester or CURRENT_SEMESTER)
+        semester or repo.get_current_semester(conn))
 
 
 @api.get("/timetable/me")
 def my_timetable(semester: str | None = None, conn=Depends(get_conn),
                  user=Depends(require("timetable:read_own"))):
     return EnrollmentService(conn, None).timetable(
-        user, semester or CURRENT_SEMESTER)
+        user, semester or repo.get_current_semester(conn))
+
+
+# ---------------------------------------------------------------------------
+# degree (培养方案审核 / 毕业规划) & timetable planning
+# ---------------------------------------------------------------------------
+@api.get("/degree/me")
+def degree_me(conn=Depends(get_conn), user=Depends(require("degree:read"))):
+    """本人毕业学分审核：逐条规则状态 + 总学分缺口。"""
+    try:
+        return DegreeService(conn).audit(user)
+    except DomainError as e:
+        map_domain_error(e)
+
+
+@api.get("/degree/me/plan")
+def degree_me_plan(conn=Depends(get_conn), user=Depends(require("degree:read"))):
+    """本人毕业路线图：待修课程按先修 DAG 拓扑序排入未来学期。"""
+    try:
+        return DegreeService(conn).plan(user)
+    except DomainError as e:
+        map_domain_error(e)
+
+
+@api.get("/degree/requirements")
+def degree_requirements(conn=Depends(get_conn),
+                        _=Depends(require("degree:read"))):
+    """列出全部培养方案版本（含历史版本与其 active 标志）。"""
+    return DegreeService(conn).list_requirements()
+
+
+@api.post("/degree/requirements")
+def create_degree_requirement(body: DegreeRequirementIn, conn=Depends(get_conn),
+                              _=Depends(require("degree:write"))):
+    """教务新建培养方案版本：同专业旧版本自动失效。"""
+    try:
+        return DegreeService(conn).create_requirement(body.model_dump())
+    except DomainError as e:
+        map_domain_error(e)
+
+
+@api.post("/timetable/plan")
+def plan_timetable(body: TimetablePlanIn, semester: str | None = None,
+                   conn=Depends(get_conn),
+                   user=Depends(require("timetable:read_own"))):
+    """给定课程集合求无冲突的教学班组合与合并周课表。"""
+    try:
+        return TimetableService(conn).plan(user, body.course_codes,
+                                           semester or repo.get_current_semester(conn))
+    except DomainError as e:
+        map_domain_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +285,8 @@ def my_timetable(semester: str | None = None, conn=Depends(get_conn),
 def phase_status(semester: str | None = None, conn=Depends(get_conn),
                  _=Depends(require("enroll:read_all"))):
     try:
-        return PhaseService(conn, None).status(semester or CURRENT_SEMESTER)
+        return PhaseService(conn, None).status(
+            semester or repo.get_current_semester(conn))
     except DomainError as e:
         map_domain_error(e)
 
@@ -229,7 +296,7 @@ def advance_phase(request: Request, semester: str | None = None,
                   conn=Depends(get_conn), _=Depends(require("phase:advance"))):
     try:
         return PhaseService(conn, request.app.state.bus).advance(
-            semester or CURRENT_SEMESTER)
+            semester or repo.get_current_semester(conn))
     except DomainError as e:
         map_domain_error(e)
 
@@ -241,7 +308,25 @@ def run_allocation(request: Request, semester: str | None = None,
     enroll_svc = EnrollmentService(conn, request.app.state.bus)
     svc = AllocationService(conn, request.app.state.bus, enroll_svc)
     try:
-        return svc.run_allocation(semester or CURRENT_SEMESTER, seed)
+        return svc.run_allocation(
+            semester or repo.get_current_semester(conn), seed)
+    except DomainError as e:
+        map_domain_error(e)
+
+
+@api.get("/admin/semester")
+def semester_status(conn=Depends(get_conn),
+                    _=Depends(require("enroll:read_all"))):
+    """当前学期与所处阶段。"""
+    return SemesterService(conn, None).status()
+
+
+@api.post("/admin/semester/advance")
+def advance_semester(request: Request, conn=Depends(get_conn),
+                     _=Depends(require("semester:advance"))):
+    """推进到下一学期：自动按课程常规开课学期生成教学班；跨学年时学生年级 +1。"""
+    try:
+        return SemesterService(conn, request.app.state.bus).advance()
     except DomainError as e:
         map_domain_error(e)
 
@@ -280,7 +365,7 @@ def agent_status(_=Depends(require("agent:use"))):
 def agent_plan(body: AgentPlanIn, conn=Depends(get_conn),
                user=Depends(require("agent:use"))):
     """方案 A：确定性的选课组合规划（只读）。"""
-    return PlannerAgent(conn, CURRENT_SEMESTER).plan(
+    return PlannerAgent(conn, repo.get_current_semester(conn)).plan(
         user, max_credits=body.max_credits, top_k=body.top_k)
 
 
@@ -289,7 +374,7 @@ def agent_chat(body: AgentChatIn, request: Request, conn=Depends(get_conn),
                user=Depends(require("agent:use"))):
     """方案 B：自然语言编排（未配置 LLM 时自动降级为离线规则模式）。"""
     orchestrator = AgentOrchestrator(conn, request.app.state.bus, user,
-                                     CURRENT_SEMESTER)
+                                     repo.get_current_semester(conn))
     return orchestrator.chat(body.message, body.history)
 
 

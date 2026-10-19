@@ -16,7 +16,12 @@ from typing import Any, Callable
 
 from app import repositories as repo
 from app.agent.planner import PlannerAgent, format_slots
-from app.services import DomainError, EnrollmentService
+from app.services import (
+    DegreeService,
+    DomainError,
+    EnrollmentService,
+    TimetableService,
+)
 
 
 @dataclass(frozen=True)
@@ -176,6 +181,37 @@ class ToolRegistry:
                 top_k=int(args.get("top_k") or 3),
             )
 
+        @_tool("audit_degree",
+               "毕业学分审核（只读）：按当前专业生效的培养方案逐条检查必修清单、"
+               "N 选一与分类学分下限，返回总学分缺口与未满足的规则。",
+               {"type": "object", "properties": {}, "required": []})
+        def audit_degree(_args):
+            return DegreeService(conn).audit(user)
+
+        @_tool("plan_graduation",
+               "毕业路线图（只读）：把待修课程按先修 DAG 拓扑排序，再按每学期学分上限"
+               "确定性排入未来学期；不可行时给出诊断。",
+               {"type": "object", "properties": {}, "required": []})
+        def plan_graduation(_args):
+            return DegreeService(conn).plan(user)
+
+        @_tool("plan_timetable",
+               "无冲突课表规划（只读）：为给定课程集合各选一个教学班，使每周课表区间"
+               "两两不重叠，优先余席较多的教学班；无解时给出冲突诊断。",
+               {"type": "object",
+                "properties": {"course_codes": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "要安排的课程代码列表，如 [\"CS201\", \"EE210\"]"}},
+                "required": ["course_codes"]})
+        def plan_timetable(args):
+            codes = args.get("course_codes") or []
+            if isinstance(codes, str):
+                codes = [codes]
+            codes = [str(c).upper() for c in codes if str(c).strip()]
+            if not codes:
+                raise DomainError("BAD_ARGUMENTS", "请提供至少一个课程代码")
+            return TimetableService(conn).plan(user, codes, semester)
+
         @_tool("submit_enrollment",
                "提交选课申请（写操作，需要用户确认）。",
                {"type": "object",
@@ -197,7 +233,8 @@ class ToolRegistry:
 
         return [list_courses, get_course, list_sections, my_transcript,
                 my_enrollments, my_timetable, semester_phase, check_course,
-                plan_courses, submit_enrollment, drop_enrollment]
+                plan_courses, audit_degree, plan_graduation, plan_timetable,
+                submit_enrollment, drop_enrollment]
 
     # ------------------------------------------------------------- 对外接口
     @property

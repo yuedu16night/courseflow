@@ -54,10 +54,18 @@ _INTENTS: dict[str, tuple[tuple[str, float], ...]] = {
         ("先修", 2.5), ("冲突", 2.5), ("符合条件", 2.5), ("能修", 2.5),
         ("够格", 2.0), ("余量", 2.0), ("满了", 2.0),
     ),
+    "degree": (
+        ("毕业审核", 3.5), ("毕业", 3.0), ("培养方案", 2.5), ("还差", 2.5),
+        ("差什么", 2.5), ("学分", 2.5), ("学位", 2.0), ("审核", 1.5),
+    ),
+    "plan_timetable": (
+        ("排课表", 3.5), ("课表规划", 3.5), ("排课", 2.5), ("无冲突课表", 3.5),
+    ),
 }
 
 #: 同分时的确定性优先级：具体意图优先于泛化意图，动作意图优先于查询意图
-_INTENT_PRIORITY = ("timetable", "drop", "enroll", "plan", "check")
+_INTENT_PRIORITY = ("timetable", "drop", "enroll", "plan", "check",
+                    "plan_timetable", "degree")
 _LOW_CONFIDENCE = 1.0
 
 _ACTIVE_STATES = {"SUBMITTED", "VALIDATED", "ENROLLED", "WAITLISTED"}
@@ -130,6 +138,16 @@ def _parse_args(raw) -> dict:
 def _extract_course_code(text: str) -> str | None:
     match = _CODE_RE.search(text or "")
     return f"{match.group(1)}{match.group(2)}".upper() if match else None
+
+
+def _extract_course_codes(text: str) -> list[str]:
+    """抽取文本中出现的全部课程代码（去重、保持首次出现顺序）。"""
+    out: list[str] = []
+    for match in _CODE_RE.finditer(text or ""):
+        code = f"{match.group(1)}{match.group(2)}".upper()
+        if code not in out:
+            out.append(code)
+    return out
 
 
 def _hh(minutes: int) -> str:
@@ -213,6 +231,51 @@ def _fmt_timetable(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+_DEGREE_STATUS_ZH = {"satisfied": "已满足", "partial": "部分满足", "unmet": "未满足"}
+
+
+def _fmt_degree(result: dict) -> str:
+    if not result:
+        return "暂时无法读取培养方案。"
+    program = result.get("program") or {}
+    lines = [f"毕业学分审核（专业 {result.get('major')}，"
+             f"培养方案 {program.get('label', '')} v{program.get('version', '')}）："
+             f"整体状态 {_DEGREE_STATUS_ZH.get(result.get('status'), result.get('status'))}。",
+             f"已获学分 {result.get('total_credits_earned', 0):g} / "
+             f"毕业要求 {result.get('total_credits_required', 0):g} 学分"
+             f"（还差 {result.get('total_credits_gap', 0):g} 学分）。"]
+    for rule in result.get("rules", []):
+        status = _DEGREE_STATUS_ZH.get(rule["status"], rule["status"])
+        detail = ""
+        if rule["status"] != "satisfied":
+            if rule["required_courses"]:
+                detail = f"，还差 {'、'.join(rule['required_courses'])}"
+            elif rule["credits_needed"]:
+                detail = f"，还差 {rule['credits_needed']:g} 学分"
+        lines.append(f"  · 【{rule['category']}·{rule['rule_type']}】"
+                     f"{status} — [{rule['reason_code']}]{detail}")
+    return "\n".join(lines)
+
+
+def _fmt_plan_timetable(result: dict) -> str:
+    if not result:
+        return "暂时无法进行课表规划。"
+    if not result.get("feasible"):
+        lines = [f"无法为这些课程排出无冲突课表（学期 {result.get('semester')}）："]
+        for diag in result.get("diagnostics", []):
+            lines.append(f"  · [{diag['code']}] {diag['message']}")
+        return "\n".join(lines)
+    lines = [f"已为 {len(result['assignments'])} 门课各选出无冲突的教学班"
+             f"（学期 {result.get('semester')}）："]
+    for item in result["assignments"]:
+        slots = "，".join(
+            f"{_DAY_ZH[s['day'] - 1]} {_hh(s['start_min'])}-{_hh(s['end_min'])}"
+            for s in item["slots"])
+        lines.append(f"  · {item['course']}.{item['section_no']}（{item['venue']}，"
+                     f"{slots}，余 {item['free_seats']} 席）")
+    return "\n".join(lines)
+
+
 class OfflineResponder:
     """未配置 LLM 时的确定性替代：加权意图评分 + 直接调用工具。
 
@@ -268,6 +331,26 @@ class OfflineResponder:
             if out["status"] != "ok":
                 return self._done(f"{code}：{out.get('error')}")
             return self._done(_fmt_check(out["result"]))
+
+        if intent == "degree":
+            out = self._call("audit_degree")
+            if out["status"] != "ok":
+                return self._done(f"毕业学分审核暂时不可用：{out.get('error')}")
+            return self._done(_fmt_degree(out["result"]))
+
+        if intent == "plan_timetable":
+            codes = _extract_course_codes(text)
+            if not codes:
+                audit = self._call("audit_degree")
+                if audit["status"] == "ok":
+                    codes = list(audit["result"].get("missing_courses") or [])[:6]
+            if not codes:
+                return self._done(
+                    "请告诉我你想上的课程代码（例如「帮我排课表 CS201 EE210」）。")
+            out = self._call("plan_timetable", {"course_codes": codes})
+            if out["status"] != "ok":
+                return self._done(f"课表规划失败：{out.get('error')}")
+            return self._done(_fmt_plan_timetable(out["result"]))
 
         # 兜底：识别不出明确意图，但消息里出现了课程代码 ⇒ 按课程查询处理
         if code:
@@ -341,6 +424,8 @@ class OfflineResponder:
                 "  · 生成选课方案 —— 例如「推荐下学期的选课方案」「帮我排一下」\n"
                 "  · 判断单门课程能否选 —— 例如「CS201 能选吗」「CS201 还有名额吗」\n"
                 "  · 查看本学期课表 —— 例如「看下我的课表」「什么时候上课」\n"
+                "  · 毕业学分审核与路线图 —— 例如「我还差什么课才能毕业」\n"
+                "  · 无冲突课表规划 —— 例如「帮我排课表 CS201 EE210」\n"
                 "  · 准备待确认的选课/退课提案 —— 例如「帮我选 CS201」「退掉 CS201」\n"
                 "所有事实都来自系统工具，写操作必须先经你确认。")
 

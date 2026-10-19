@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
     full_name   TEXT NOT NULL,
     role        TEXT NOT NULL CHECK (role IN ('student','instructor','registrar','admin')),
     major       TEXT,
+    grade       INTEGER,                           -- 年级 1..4（大一..大四），非学生为 NULL
     max_credits INTEGER NOT NULL DEFAULT 35,
     completed_courses TEXT NOT NULL DEFAULT '[]'   -- JSON list of course codes
 );
@@ -40,6 +41,8 @@ CREATE TABLE IF NOT EXISTS courses (
     title     TEXT NOT NULL,
     credits   REAL NOT NULL,
     department TEXT NOT NULL,
+    category  TEXT NOT NULL DEFAULT '',           -- 课程类别（五类培养方案课程）
+    term      TEXT NOT NULL DEFAULT 'FA',         -- 常规开课学期 FA/SP
     prerequisites TEXT NOT NULL DEFAULT '[]',    -- JSON list of course codes
     description TEXT NOT NULL DEFAULT '',
     catalog_version INTEGER NOT NULL,           -- 1,2,3... per code
@@ -91,7 +94,51 @@ CREATE TABLE IF NOT EXISTS event_log (          -- append-only
     payload TEXT NOT NULL,
     ts      REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS degree_requirements (   -- versioned registry
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    major             TEXT NOT NULL,
+    version           INTEGER NOT NULL,
+    active            INTEGER NOT NULL DEFAULT 1,
+    total_credits_min REAL NOT NULL DEFAULT 0,
+    label             TEXT NOT NULL DEFAULT '',
+    UNIQUE (major, version)
+);
+
+CREATE TABLE IF NOT EXISTS degree_requirement_rules (   -- rule rows
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    requirement_id INTEGER NOT NULL REFERENCES degree_requirements(id),
+    category       TEXT NOT NULL,
+    rule_type      TEXT NOT NULL,           -- all_of / choose_n / min_credits
+    courses        TEXT NOT NULL DEFAULT '[]',  -- JSON list of course codes
+    min_credits    REAL,
+    min_courses    INTEGER,
+    sort_order     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (   -- 全局运行时配置（如当前学期）
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
 """
+
+
+#: 旧库补列（CREATE TABLE IF NOT EXISTS 不会为已存在的表补列）
+_MIGRATIONS: dict[str, dict[str, str]] = {
+    "users": {"grade": "INTEGER"},
+    "courses": {"category": "TEXT NOT NULL DEFAULT ''",
+                "term": "TEXT NOT NULL DEFAULT 'FA'"},
+}
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    for table, columns in _MIGRATIONS.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+    conn.commit()
+
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
@@ -109,6 +156,7 @@ def init_db(db_path: str | Path) -> None:
     conn = connect(db_path)
     try:
         conn.executescript(DDL)
+        _ensure_columns(conn)
         conn.commit()
     finally:
         conn.close()

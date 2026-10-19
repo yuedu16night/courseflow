@@ -5,63 +5,259 @@
 ## 0. 引导启动
 - 应用工厂创建默认账号；已签发 registrar 与 admin 会话
 
-## 1. 数据初始化：用户、课程目录（先修课程 DAG）、教学班
-- `OK 创建用户 alice（student）` → HTTP 200
-- `OK 创建用户 bob（student）` → HTTP 200
-- `OK 创建用户 charlie（student）` → HTTP 200
-- `OK 创建用户 dave（student）` → HTTP 200
-- `OK 创建用户 erin（student）` → HTTP 200
-- `OK 创建用户 carol（instructor）` → HTTP 200
-- 成绩单已载入（SIS 导入）
-- `OK 课程 CS101` → HTTP 200
-- `OK 课程 MATH101` → HTTP 200
-- `OK 课程 CS201` → HTTP 200
-- `OK 课程 EE210` → HTTP 200
-- `OK 教学班 CS201.01（容量 2，周一 08:30-10:10，Carol Chen）` → HTTP 200
-- `OK 教学班 EE210.01（容量 1，周二 08:30-10:10，Dan Wu）` → HTTP 200
+## 1. 数据初始化：学生（大一…大四）、课程目录（五类）、培养方案、教学班
+- `OK 创建学生 alice（王小明 · 大一CS）` → HTTP 200
+- `OK 创建学生 bob（李思远 · 大二CS）` → HTTP 200
+- `OK 创建学生 charlie（张雅涵 · 大三CS）` → HTTP 200
+- `OK 创建学生 dave（陈浩然 · 大四CS）` → HTTP 200
+- `OK 创建学生 erin（赵一鸣 · 大二EE）` → HTTP 200
+- `OK 创建教师 carol（林晓梅）` → HTTP 200
+- 成绩单已载入（SIS 导入，按年级递进）
+
+- `OK 课程 MATH101 高等数学A(一)` → HTTP 200
+- `OK 课程 MATH102 高等数学A(二)` → HTTP 200
+- `OK 课程 MATH201 线性代数` → HTTP 200
+- `OK 课程 MATH202 概率论与数理统计` → HTTP 200
+- `OK 课程 PHY101 大学物理(一)` → HTTP 200
+- `OK 课程 PHY102 大学物理(二)` → HTTP 200
+- `OK 课程 PHY201 大学物理实验` → HTTP 200
+- `OK 课程 CS101 程序设计基础` → HTTP 200
+- `OK 课程 CS102 面向对象程序设计` → HTTP 200
+- `OK 课程 CS104 计算思维导论` → HTTP 200
+- `OK 课程 CS105 高级程序设计` → HTTP 200
+- `OK 课程 CS201 数据结构与算法` → HTTP 200
+- `OK 课程 CS202 计算机组成原理` → HTTP 200
+- `OK 课程 CS211 离散数学` → HTTP 200
+- `OK 课程 CS212 操作系统` → HTTP 200
+- `OK 课程 CS301 计算机网络` → HTTP 200
+- `OK 课程 CS302 数据库系统` → HTTP 200
+- `OK 课程 CS311 软件工程` → HTTP 200
+- `OK 课程 CS312 算法设计与分析` → HTTP 200
+- `OK 课程 CS321 编译原理` → HTTP 200
+- `OK 课程 CS401 毕业设计(计算机)` → HTTP 200
+- `OK 课程 EE101 电路分析基础` → HTTP 200
+- `OK 课程 EE102 模拟电子技术` → HTTP 200
+- `OK 课程 EE111 电工电子实习` → HTTP 200
+- `OK 课程 EE201 数字电子技术` → HTTP 200
+- `OK 课程 EE202 信号与系统` → HTTP 200
+- `OK 课程 EE211 电磁场与电磁波` → HTTP 200
+- `OK 课程 EE221 微机原理与接口技术` → HTTP 200
+- `OK 课程 EE301 通信原理` → HTTP 200
+- `OK 课程 EE302 自动控制原理` → HTTP 200
+- `OK 课程 EE311 电力电子技术` → HTTP 200
+- `OK 课程 EE321 数字信号处理` → HTTP 200
+- `OK 课程 EE331 嵌入式系统设计` → HTTP 200
+- `OK 课程 EE401 毕业设计(电子信息)` → HTTP 200
+- `OK 课程 CS331 人工智能导论` → HTTP 200
+- `OK 课程 CS332 机器学习` → HTTP 200
+- `OK 课程 CS341 计算机图形学` → HTTP 200
+- `OK 课程 CS342 计算机视觉` → HTTP 200
+- `OK 课程 CS351 云计算技术` → HTTP 200
+- `OK 课程 CS352 大数据技术` → HTTP 200
+- `OK 课程 CS361 信息安全` → HTTP 200
+- `OK 课程 EE341 射频电路设计` → HTTP 200
+- `OK 课程 EE342 微波技术` → HTTP 200
+- `OK 课程 EE351 数字图像处理` → HTTP 200
+- `OK 课程 EE352 模式识别` → HTTP 200
+- `OK 课程 EE361 电力系统分析` → HTTP 200
+- `OK 课程 EE362 高电压技术` → HTTP 200
+- `OK 课程 EE371 机器人学导论` → HTTP 200
+- `OK 课程 IC301 计算神经科学` → HTTP 200
+- `OK 课程 IC302 生物信息学` → HTTP 200
+- `OK 课程 IC311 智能硬件设计` → HTTP 200
+- `OK 课程 IC312 数据科学导论` → HTTP 200
+- `OK 课程 IC321 量子计算导论` → HTTP 200
+- `OK 课程 IC322 类脑智能` → HTTP 200
+- `OK 课程 GE101 思想道德与法治` → HTTP 200
+- `OK 课程 GE102 中国近现代史纲要` → HTTP 200
+- `OK 课程 GE103 马克思主义基本原理` → HTTP 200
+- `OK 课程 GE104 毛泽东思想和中国特色社会主义理论体系概论` → HTTP 200
+- `OK 课程 GE201 大学英语(一)` → HTTP 200
+- `OK 课程 GE202 大学英语(二)` → HTTP 200
+- `OK 课程 GE203 体育(一)` → HTTP 200
+- `OK 课程 GE204 体育(二)` → HTTP 200
+- `OK 课程 GE301 大学语文` → HTTP 200
+- `OK 课程 GE302 军事理论` → HTTP 200
+- `OK 课程 GE401 创新创业基础` → HTTP 200
+- `OK 课程 GE402 职业发展与就业指导` → HTTP 200
+- `OK 课程 GE501 艺术鉴赏` → HTTP 200
+- `OK 课程 GE601 心理健康教育` → HTTP 200
+- `OK 课程 GE602 自然科学导论` → HTTP 200
+- `OK 课程 PE101 工程实践创新` → HTTP 200
+- `OK 课程 PE201 学科竞赛实训` → HTTP 200
+- `OK 课程 PE301 科研训练` → HTTP 200
+- `OK 课程 PE401 跨学科项目设计` → HTTP 200
+- `OK 课程 PE501 自主学习与终身学习` → HTTP 200
+- `OK 课程 MATH301 数值分析` → HTTP 200
+- `OK 课程 MATH302 复变函数与积分变换` → HTTP 200
+- `OK 课程 PHY202 近代物理导论` → HTTP 200
+- `OK 课程 CS106 程序设计进阶` → HTTP 200
+- `OK 课程 CS213 图论` → HTTP 200
+- `OK 课程 CS222 数字逻辑` → HTTP 200
+- `OK 课程 CS303 移动应用开发` → HTTP 200
+- `OK 课程 CS313 软件测试` → HTTP 200
+- `OK 课程 CS322 程序分析` → HTTP 200
+- `OK 课程 CS402 工程实践(计算机)` → HTTP 200
+- `OK 课程 EE112 电路实验` → HTTP 200
+- `OK 课程 EE203 电子测量技术` → HTTP 200
+- `OK 课程 EE231 单片机原理与应用` → HTTP 200
+- `OK 课程 EE303 通信电子线路` → HTTP 200
+- `OK 课程 CS333 深度学习` → HTTP 200
+- `OK 课程 CS343 虚拟现实技术` → HTTP 200
+- `OK 课程 CS353 物联网技术` → HTTP 200
+- `OK 课程 CS362 网络攻防` → HTTP 200
+- `OK 课程 CS371 软件架构` → HTTP 200
+- `OK 课程 CS372 分布式系统` → HTTP 200
+- `OK 课程 CS381 自然语言处理` → HTTP 200
+- `OK 课程 CS382 强化学习` → HTTP 200
+- `OK 课程 EE343 天线与电波传播` → HTTP 200
+- `OK 课程 EE353 语音信号处理` → HTTP 200
+- `OK 课程 EE363 智能电网` → HTTP 200
+- `OK 课程 EE372 控制系统仿真` → HTTP 200
+- `OK 课程 EE373 智能机器人` → HTTP 200
+- `OK 课程 EE381 传感器技术` → HTTP 200
+- `OK 课程 IC303 认知科学导论` → HTTP 200
+- `OK 课程 IC313 计算材料学` → HTTP 200
+- `OK 课程 IC323 数字人文` → HTTP 200
+- `OK 课程 IC331 医学影像分析` → HTTP 200
+- `OK 课程 IC332 生物医学工程导论` → HTTP 200
+- `OK 课程 GE105 形势与政策` → HTTP 200
+- `OK 课程 GE106 社会主义发展史` → HTTP 200
+- `OK 课程 GE205 大学英语听说` → HTTP 200
+- `OK 课程 GE206 学术英语写作` → HTTP 200
+- `OK 课程 GE303 应用文写作` → HTTP 200
+- `OK 课程 GE403 创业管理` → HTTP 200
+- `OK 课程 GE404 领导力与团队协作` → HTTP 200
+- `OK 课程 GE502 音乐鉴赏` → HTTP 200
+- `OK 课程 GE503 影视鉴赏` → HTTP 200
+- `OK 课程 GE604 环境与可持续发展` → HTTP 200
+- `OK 课程 PE102 工程设计表达` → HTTP 200
+- `OK 课程 PE202 学科竞赛实训(进阶)` → HTTP 200
+- `OK 课程 PE302 科研论文写作` → HTTP 200
+- `OK 课程 PE402 跨学科创新实践` → HTTP 200
+- `OK 课程 PE601 大学学习科学` → HTTP 200
+- 课程目录共 122 门，分五类；每门标注常规开课学期（FA/SP）
+
+- `OK 培养方案：计算机科学与技术（主修 82 全部必修 + 选修 15 + 交叉 9 + 通识 20 + 个性化 6，合计 132）` → HTTP 200
+- `OK 培养方案：电子信息工程（主修 82 全部必修 + 选修 15 + 交叉 9 + 通识 20 + 个性化 6，合计 135）` → HTTP 200
+
+- `OK 教学班 CS101.01（林晓梅 · 计算机楼101 · 容量 60）` → HTTP 200
+- `OK 教学班 CS104.01（陈志远 · 计算机楼103 · 容量 1）` → HTTP 200
+- `OK 教学班 CS106.01（王建国 · 计算机楼105 · 容量 60）` → HTTP 200
+- `OK 教学班 CS201.01（刘慧敏 · 计算机楼107 · 容量 1）` → HTTP 200
+- `OK 教学班 CS211.01（张晓东 · 计算机楼109 · 容量 60）` → HTTP 200
+- `OK 教学班 CS222.01（赵丹 · 计算机楼102 · 容量 60）` → HTTP 200
+- `OK 教学班 CS301.01（孙文博 · 计算机楼104 · 容量 60）` → HTTP 200
+- `OK 教学班 CS303.01（周倩 · 计算机楼106 · 容量 60）` → HTTP 200
+- `OK 教学班 CS311.01（吴海涛 · 计算机楼108 · 容量 60）` → HTTP 200
+- `OK 教学班 CS313.01（郑立 · 计算机楼110 · 容量 60）` → HTTP 200
+- `OK 教学班 CS331.01（林晓梅 · 计算机楼101 · 容量 60）` → HTTP 200
+- `OK 教学班 CS333.01（陈志远 · 计算机楼103 · 容量 60）` → HTTP 200
+- `OK 教学班 CS341.01（王建国 · 计算机楼105 · 容量 60）` → HTTP 200
+- `OK 教学班 CS343.01（刘慧敏 · 计算机楼107 · 容量 60）` → HTTP 200
+- `OK 教学班 CS351.01（张晓东 · 计算机楼109 · 容量 60）` → HTTP 200
+- `OK 教学班 CS353.01（赵丹 · 计算机楼102 · 容量 60）` → HTTP 200
+- `OK 教学班 CS371.01（孙文博 · 计算机楼104 · 容量 60）` → HTTP 200
+- `OK 教学班 CS381.01（周倩 · 计算机楼106 · 容量 60）` → HTTP 200
+- `OK 教学班 CS402.01（吴海涛 · 计算机楼108 · 容量 60）` → HTTP 200
+- `OK 教学班 EE101.01（郑立 · 电子楼110 · 容量 60）` → HTTP 200
+- `OK 教学班 EE201.01（林晓梅 · 电子楼101 · 容量 60）` → HTTP 200
+- `OK 教学班 EE203.01（陈志远 · 电子楼103 · 容量 60）` → HTTP 200
+- `OK 教学班 EE211.01（王建国 · 电子楼105 · 容量 60）` → HTTP 200
+- `OK 教学班 EE301.01（刘慧敏 · 电子楼107 · 容量 60）` → HTTP 200
+- `OK 教学班 EE303.01（张晓东 · 电子楼109 · 容量 60）` → HTTP 200
+- `OK 教学班 EE311.01（赵丹 · 电子楼102 · 容量 60）` → HTTP 200
+- `OK 教学班 EE331.01（孙文博 · 电子楼104 · 容量 60）` → HTTP 200
+- `OK 教学班 EE341.01（周倩 · 电子楼106 · 容量 60）` → HTTP 200
+- `OK 教学班 EE343.01（吴海涛 · 电子楼108 · 容量 60）` → HTTP 200
+- `OK 教学班 EE351.01（郑立 · 电子楼110 · 容量 60）` → HTTP 200
+- `OK 教学班 EE361.01（林晓梅 · 电子楼101 · 容量 60）` → HTTP 200
+- `OK 教学班 EE363.01（陈志远 · 电子楼103 · 容量 60）` → HTTP 200
+- `OK 教学班 EE371.01（王建国 · 电子楼105 · 容量 60）` → HTTP 200
+- `OK 教学班 EE381.01（刘慧敏 · 电子楼107 · 容量 60）` → HTTP 200
+- `OK 教学班 GE101.01（张晓东 · 公共教学楼109 · 容量 60）` → HTTP 200
+- `OK 教学班 GE103.01（赵丹 · 公共教学楼102 · 容量 60）` → HTTP 200
+- `OK 教学班 GE105.01（孙文博 · 公共教学楼104 · 容量 60）` → HTTP 200
+- `OK 教学班 GE201.01（周倩 · 公共教学楼106 · 容量 60）` → HTTP 200
+- `OK 教学班 GE203.01（吴海涛 · 公共教学楼108 · 容量 60）` → HTTP 200
+- `OK 教学班 GE205.01（郑立 · 公共教学楼110 · 容量 60）` → HTTP 200
+- `OK 教学班 GE301.01（林晓梅 · 公共教学楼101 · 容量 60）` → HTTP 200
+- `OK 教学班 GE303.01（陈志远 · 公共教学楼103 · 容量 60）` → HTTP 200
+- `OK 教学班 GE401.01（王建国 · 公共教学楼105 · 容量 60）` → HTTP 200
+- `OK 教学班 GE403.01（刘慧敏 · 公共教学楼107 · 容量 60）` → HTTP 200
+- `OK 教学班 GE501.01（张晓东 · 公共教学楼109 · 容量 60）` → HTTP 200
+- `OK 教学班 GE503.01（赵丹 · 公共教学楼102 · 容量 60）` → HTTP 200
+- `OK 教学班 GE602.01（孙文博 · 公共教学楼104 · 容量 60）` → HTTP 200
+- `OK 教学班 GE604.01（周倩 · 公共教学楼106 · 容量 60）` → HTTP 200
+- `OK 教学班 IC302.01（吴海涛 · 交叉学科楼108 · 容量 60）` → HTTP 200
+- `OK 教学班 IC303.01（郑立 · 交叉学科楼110 · 容量 60）` → HTTP 200
+- `OK 教学班 IC312.01（林晓梅 · 交叉学科楼101 · 容量 60）` → HTTP 200
+- `OK 教学班 IC321.01（陈志远 · 交叉学科楼103 · 容量 60）` → HTTP 200
+- `OK 教学班 IC331.01（王建国 · 交叉学科楼105 · 容量 60）` → HTTP 200
+- `OK 教学班 MATH101.01（刘慧敏 · 数理楼107 · 容量 60）` → HTTP 200
+- `OK 教学班 MATH201.01（张晓东 · 数理楼109 · 容量 60）` → HTTP 200
+- `OK 教学班 MATH301.01（赵丹 · 数理楼102 · 容量 60）` → HTTP 200
+- `OK 教学班 PE101.01（孙文博 · 文体中心104 · 容量 60）` → HTTP 200
+- `OK 教学班 PE102.01（周倩 · 文体中心106 · 容量 60）` → HTTP 200
+- `OK 教学班 PE301.01（吴海涛 · 文体中心108 · 容量 60）` → HTTP 200
+- `OK 教学班 PE302.01（郑立 · 文体中心110 · 容量 60）` → HTTP 200
+- `OK 教学班 PE501.01（林晓梅 · 文体中心101 · 容量 60）` → HTTP 200
+- `OK 教学班 PE601.01（陈志远 · 文体中心103 · 容量 60）` → HTTP 200
+- `OK 教学班 PHY101.01（王建国 · 数理楼105 · 容量 60）` → HTTP 200
+- `OK 教学班 PHY202.01（刘慧敏 · 数理楼107 · 容量 60）` → HTTP 200
+- 共投放 64 个教学班；时间取自标准作息（如第 1-2 节 480–580 分钟）
 
 ## 2. 语义约束校验（phase = pre_enrollment）
-- `OK dave 申请 CS201.01` → HTTP 400
-    - REJECTED: PREREQ_MISSING（dave 未通过 CS101）—— 先修 DAG 策略
-- `OK alice 填报志愿 CS201.01` → HTTP 200
+- `OK alice（大一，无先修）申请 CS201.01` → HTTP 400
+    - REJECTED: PREREQ_MISSING —— 先修 DAG 策略（缺 CS101）
+- `OK alice 填报志愿 MATH101.01` → HTTP 200
     - 志愿以 VALIDATED 存储（本阶段不计容量）
-- `OK 添加环边 CS201 -> CS101` → HTTP 400
-    - REJECTED: PREREQ_CYCLE —— 课程目录图完整性得以保持
+- `OK 添加环边 CS101 -> CS201` → HTTP 400
+    - REJECTED: PREREQ_CYCLE —— 目录先修 DAG 完整性得以保持
 - `OK 修改 CS101 -> 生成不可变版本 2` → HTTP 200
     - CS101 现处于 catalog_version 2
 
-## 3. 多阶段编排：pre_enrollment → allocation
-- `OK bob 填报志愿 CS201.01` → HTTP 200
-- `OK charlie 填报志愿 CS201.01` → HTTP 200
+## 3. 多阶段编排：pre_enrollment → allocation（带种子抽签）
+- `OK bob 填报志愿 CS201.01（容量 1）` → HTTP 200
+- `OK erin 填报志愿 CS201.01（容量 1）` → HTTP 200
+- `OK charlie 填报志愿 CS201.01` → HTTP 400
+    - REJECTED: ALREADY_PASSED —— 已通过课程不允许重修选课
 - `OK 推进阶段` → HTTP 200
-    - phase → allocation；交接快照：{'capacity': 2, 'enrolled': 0, 'validated_pending': 3, 'waitlisted': 0}
-- `OK 在 ALLOCATION 阶段直接选课` → HTTP 400
-    - REJECTED: PHASE_LOCKED —— 行为受阶段约束
+    - phase → allocation；交接快照：{'capacity': 1, 'enrolled': 0, 'validated_pending': 2, 'waitlisted': 0}
 - `OK 教务运行带种子的批量分配` → HTTP 200
-    - 分配结果：{'CS201.01': {'capacity': 2, 'requests': 3, 'enrolled': 2, 'waitlisted': 1}, 'EE210.01': {'capacity': 1, 'requests': 0, 'enrolled': 0, 'waitlisted': 0}}
+    - 分配结果：{'capacity': 1, 'requests': 2, 'enrolled': 1, 'waitlisted': 1}
 
 ## 4. add_drop：先到先得 + 事件驱动的候补晋升
 - `OK 推进阶段 → add_drop` → HTTP 200
-- `OK bob 申请 EE210.01（容量 1）` → HTTP 200
+- 清空上一阶段的占位，观察纯净的先到先得/候补行为
+- `OK bob 申请 CS104.01（容量 1）` → HTTP 200
     - state: ENROLLED
-- `OK alice 申请 EE210.01 —— 已满` → HTTP 200
+- `OK alice 申请 CS104.01 —— 已满` → HTTP 200
     - state: WAITLISTED (waitlist_seq=1)
-- `OK erin 申请 EE210.01 —— 已满` → HTTP 200
+- `OK charlie 申请 CS104.01 —— 已满` → HTTP 200
     - state: WAITLISTED (waitlist_seq=2)
-- `OK charlie 申请 EE210.01` → HTTP 400
-    - REJECTED: PREREQ_MISSING（charlie 缺少 MATH101）
-- `OK alice 退课 EE210.01` → HTTP 200
-    - 席位释放 → 发布事件 `section.seat_released`
-    - 复查 alice：CANCELLED —— FIFO 队首正是她本人，无需晋升
-- `OK bob 退课 EE210.01` → HTTP 200
-    - 事件 `section.seat_released` → WaitlistEngine 晋升 erin
-    - erin：WAITLISTED → ENROLLED（零轮询，事件驱动）
+- `OK bob 退课 CS104.01` → HTTP 200
+    - 事件 `section.seat_released` → WaitlistEngine 晋升候补队首 alice
+    - alice：WAITLISTED → ENROLLED（零轮询，事件驱动）
 - `OK 推进阶段 → closed` → HTTP 200
     - 学期 CLOSED：选课冻结；审计轨迹不可变
 
 ## 5. 可观测性：审计链与事件日志
-- 选课 #7（erin → EE210.01）生命周期：
-    - SUBMITTED → **VALIDATED** by erin (策略校验全部通过)
-    - VALIDATED → **WAITLISTED** by erin (名额已满，进入候补队列)
+- 选课 #7（alice → CS104.01）生命周期：
+    - SUBMITTED → **VALIDATED** by alice (策略校验全部通过)
+    - VALIDATED → **WAITLISTED** by alice (名额已满，进入候补队列)
     - WAITLISTED → **ENROLLED** by system:waitlist (从候补队列晋升)
-- 事件日志：共记录 19 条事件，类型：['enrollment.state_changed', 'phase.changed', 'section.seat_released', 'waitlist.promoted']
+- 事件日志：共记录 23 条事件，类型：['enrollment.state_changed', 'phase.changed', 'section.seat_released', 'waitlist.promoted']
+
+## 6. 培养方案审核与毕业规划（按课程类别学分）
+- dave（大四）：状态 **partial**，总学分 130/132；主修课程 21/21 门；专业选修课 12/15；交叉课程 6/9；通识课程 22/20；个性化课程 8/6
+- charlie（大三）：状态 **partial**，总学分 62/132；主修课程 11/21 门；专业选修课 0/15；交叉课程 0/9；通识课程 19/20；个性化课程 0/6
+- alice（大一）：状态 **unmet**，总学分 0/132；主修课程 0/21 门；专业选修课 0/15；交叉课程 0/9；通识课程 0/20；个性化课程 0/6
+- dave 毕业路线图：feasible=True，待修 2 门，跨越 1 个学期
+
+## 7. 推进学期：自动开课 + 跨学年自动升年级
+- `OK 推进到下一学期` → HTTP 200
+    - 2026FA → **2027SP**；自动开课 58 个，升年级 0 人
+- `OK 推进到下一学期` → HTTP 200
+    - 2027SP → **2027FA**；自动开课 64 个，升年级 4 人
+    - alice 当前年级：大二（grade=2）；当前学期 2027FA，阶段 pre_enrollment

@@ -50,6 +50,16 @@
           border-radius:6px; padding:2px 8px; font-size:11px; margin:2px 4px 2px 0; }
   .proposal { border:1px dashed var(--brand); background:#f5f7ff; border-radius:8px;
               padding:10px; margin:8px 0; font-size:13px; }
+  /* 周课表网格：列＝星期，行＝节次 */
+  .tt { width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; margin-top:6px; }
+  .tt th { background:#f1f3f9; color:var(--muted); font-weight:600; text-align:center;
+           padding:5px 4px; border:1px solid var(--line); }
+  .tt td { border:1px solid var(--line); padding:4px 6px; vertical-align:top; }
+  .tt .p { background:#fafbff; color:var(--muted); text-align:center; width:78px;
+           font-size:11px; line-height:1.4; }
+  .tt .b { background:#eef2ff; }
+  .tt .b b { color:var(--brand); }
+  .tt .empty { background:repeating-linear-gradient(45deg,#fff,#fff 6px,#fafbff 6px,#fafbff 12px); }
 </style>
 </head>
 <body>
@@ -88,16 +98,22 @@ const STATE_ZH = { SUBMITTED:"已提交", VALIDATED:"已校验", ENROLLED:"已�
   WAITLISTED:"候补中", REJECTED:"已拒绝", CANCELLED:"已取消", EXPIRED:"已失效", DROPPED:"已退课" };
 const PHASE_ZH = { pre_enrollment:"预选阶段", allocation:"抽签分配", add_drop:"补退选", closed:"已截止" };
 const ROLE_ZH  = { student:"学生", instructor:"教师", registrar:"教务", admin:"管理员" };
+const GRADE_ZH = { 1:"大一", 2:"大二", 3:"大三", 4:"大四" };
+const DEGREE_STATUS_ZH = { satisfied:"已满足", partial:"部分满足", unmet:"未满足" };
+const RULE_TYPE_ZH = { all_of:"必修全部", choose_n:"限选若干", min_credits:"学分下限" };
+const CS_PILL = { "已修":"ENROLLED", "在修":"VALIDATED", "未修":"DROPPED" };
 const REASON_ZH = { PREREQ_MISSING:"缺少先修课", TIMETABLE_CONFLICT:"课表时间冲突",
   CREDIT_LIMIT:"超出学分上限", DUPLICATE_ENROLLMENT:"重复选课", ALREADY_PASSED:"课程已通过",
   PREREQ_CYCLE:"先修课成环", PREREQ_UNKNOWN:"先修课不存在", COURSE_UNKNOWN:"课程不存在",
-  SECTION_UNKNOWN:"教学班不存在", PHASE_LOCKED:"阶段锁定", WRONG_PHASE:"阶段不正确",
-  ENROLLMENT_UNKNOWN:"选课记录不存在", INVALID_STATE:"当前状态不允许",
-  SEMESTER_UNKNOWN:"学期不存在", PHASE_TERMINAL:"学期已截止" };
+  COURSE_NOT_FOUND:"课程不存在", SECTION_UNKNOWN:"教学班不存在", PHASE_LOCKED:"阶段锁定",
+  WRONG_PHASE:"阶段不正确", ENROLLMENT_UNKNOWN:"选课记录不存在", INVALID_STATE:"当前状态不允许",
+  SEMESTER_UNKNOWN:"学期不存在", PHASE_TERMINAL:"学期已截止",
+  DEGREE_PROGRAM_NOT_FOUND:"暂无培养方案" };
 const EVENT_ZH = { "enrollment.state_changed":"选课状态变更", "section.seat_released":"名额释放",
   "waitlist.promoted":"候补晋升", "phase.changed":"阶段切换", "catalog.versioned":"课程目录更新",
-  "agent.turn":"智能体交互" };
+  "semester.advanced":"学期推进", "agent.turn":"智能体交互" };
 const DAY_ZH = ["周一","周二","周三","周四","周五","周六","周日"];
+const CATEGORY_ORDER = ["主修课程","专业选修课","交叉课程","通识课程","个性化课程"];
 
 const stateLabel = s => `${STATE_ZH[s]||s}<span class="code">${s}</span>`;
 const phaseLabel = p => `${PHASE_ZH[p]||p}<span class="code">${p}</span>`;
@@ -126,13 +142,15 @@ async function doLogin(){
 }
 function logout(){ localStorage.clear(); location.reload(); }
 
+const whoLabel = u => `${u.full_name}（${ROLE_ZH[u.role]||u.role}`
+  + (u.grade ? " · "+GRADE_ZH[u.grade] : "") + `）`;
+
 async function boot(){
-  document.getElementById("whoami").textContent = `${ME.full_name}（${ROLE_ZH[ME.role]||ME.role}）`;
-  const r = await api("/auth/me",{headers:{Authorization:"Bearer "+TOKEN}});
+  const r = await api("/auth/me");
   ME = {...ME, ...r.body};
-  document.getElementById("whoami").textContent = `${ME.full_name}（${ROLE_ZH[ME.role]||ME.role}）`;
-  const pr = await api("/admin/phase");
-  PHASE = pr.status===200 ? pr.body.phase : "pre_enrollment";
+  document.getElementById("whoami").textContent = whoLabel(ME);
+  document.getElementById("sem").textContent = ME.semester || "—";
+  PHASE = ME.phase || "pre_enrollment";
   document.getElementById("phasePill").innerHTML = `<span class="pill VALIDATED">${phaseLabel(PHASE)}</span>`;
   buildTabs(); render();
 }
@@ -140,7 +158,7 @@ async function boot(){
 function buildTabs(){
   const tabs = { catalog:"课程目录", enroll:"选课申请", my:"我的选课",
                  timetable:"我的课表" };
-  if(ME.role==="student") Object.assign(tabs,{assistant:"智能选课助手"});
+  if(ME.role==="student") Object.assign(tabs,{degree:"培养计划",assistant:"智能选课助手"});
   if(ME.role==="instructor") Object.assign(tabs,{roster:"班级名单"});
   if(["registrar","admin"].includes(ME.role))
     Object.assign(tabs,{admin:"编排管理",audit:"审计与事件"});
@@ -159,30 +177,44 @@ async function render(tab){
   const c = document.getElementById("content");
   if(tab==="catalog"){
     const [courses, sections] = await Promise.all([api("/courses"), api("/sections")]);
-    c.innerHTML = `<div class="card"><h3>课程目录（按学期版本化，不可变）</h3>
-      <table><tr><th>课程代码</th><th>课程名称</th><th>学分</th><th>先修课程</th><th>版本</th></tr>
+    c.innerHTML = `<div class="card"><h3>课程目录</h3>
+      <table><tr><th>课程代码</th><th>课程名称</th><th>学分</th><th>类别</th><th>常规开课</th><th>先修课程</th><th>版本</th></tr>
       ${courses.body.map(x=>`<tr><td><b>${x.code}</b></td><td>${x.title}</td><td>${x.credits}</td>
+        <td>${x.category||"—"}</td><td>${x.term==="SP"?"春季（下）":"秋季（上）"}</td>
         <td>${x.prerequisites.join("、")||"—"}</td><td>v${x.catalog_version}</td></tr>`).join("")}</table></div>
-      <div class="card"><h3>教学班 — 当前阶段：<span class="pill VALIDATED">${phaseLabel(PHASE)}</span></h3>
+      <div class="card"><h3>教学班 — 当前阶段：<span class="pill VALIDATED">${phaseLabel(PHASE)}</span> · 学期 <b>${ME.semester||"—"}</b></h3>
       <table><tr><th>ID</th><th>课程</th><th>班次</th><th>授课教师</th><th>容量</th><th>地点</th><th>上课时间</th></tr>
       ${sections.body.map(s=>`<tr><td>${s.id}</td><td>${s.course_code}</td><td>${s.section_no}</td>
         <td>${s.instructor_name}</td><td>${s.capacity}</td><td>${s.venue}</td>
-        <td>${s.slots.map(sl=>day(sl.day)+" "+hh(sl.start_min)+"–"+hh(sl.end_min)).join("，")}</td></tr>`).join("")}
+        <td>${s.slots.map(sl=>day(sl.day)+" "+hh(sl.start_min)+"–"+hh(sl.end_min)
+          +`<span class="code">${periodLabel(sl.start_min,sl.end_min)}</span>`).join("，")}</td></tr>`).join("")}
       </table></div>`;
   }
   if(tab==="enroll"){
-    const sections = (await api("/sections")).body;
-    c.innerHTML = `<div class="card"><h3>选课申请</h3><div class="row">
-      <select id="sec">${sections.map(s=>`<option value="${s.id}">#${s.id} ${s.course_code}.${s.section_no}（容量 ${s.capacity}）</option>`).join("")}</select>
-      <button class="act" onclick="enroll()">提交选课请求</button></div>
-      <p class="muted">请求将依次通过完整策略链：重复选课 → 先修课程（DAG）→ 课表冲突 → 学分上限，
-      随后分配名额、进入候补队列（先到先得），或附原因码拒绝。</p></div>`;
+    const secs = (await api("/sections/eligible")).body;
+    const groups = CATEGORY_ORDER
+      .map(cat=>({cat, items: secs.filter(s=>s.category===cat)}))
+      .filter(g=>g.items.length);
+    c.innerHTML = `<div class="card"><h3>选课申请</h3>
+      ${groups.length ? groups.map(g=>`<div class="plan">
+        <div class="row" style="justify-content:space-between;margin:0">
+          <span><b>${g.cat}</b> <span class="muted">· ${g.items.length} 门可选</span></span></div>
+        <table><tr><th>课程</th><th>学分</th><th>上课时间</th><th>已选/容量</th><th>操作</th></tr>
+        ${g.items.map(s=>`<tr><td><b>${esc(s.title)}</b><span class="code">${s.course_code}</span></td>
+          <td>${s.credits}</td>
+          <td class="muted">${s.slots.map(sl=>day(sl.day)+" "+hh(sl.start_min)+"–"+hh(sl.end_min)
+            +`<span class="code">${periodLabel(sl.start_min,sl.end_min)}</span>`).join("，")}</td>
+          <td>${s.enrolled_count}/${s.capacity}</td>
+          <td>${s.enrollment_id
+            ? `<button class="act red" onclick="enrollDrop(${s.enrollment_id})">退课</button>`
+            : `<button class="act" onclick="enrollSection(${s.id})">选课</button>`}</td></tr>`).join("")}</table></div>`).join("")
+      : `<p class="muted">当前没有可选的课程。</p>`}</div>`;
   }
   if(tab==="my"){
     const mine = (await api("/enrollments/me")).body;
     c.innerHTML = `<div class="card"><h3>我的选课记录</h3><table>
       <tr><th>ID</th><th>教学班</th><th>学期</th><th>状态</th><th>候补序号</th><th>原因</th><th></th></tr>
-      ${mine.map(e=>`<tr><td>${e.id}</td><td>${e.section}</td><td>${e.semester}</td>
+      ${mine.map(e=>`<tr><td>${e.id}</td><td><b>${esc(e.title||"")}</b><span class="code">${e.section}</span></td><td>${e.semester}</td>
         <td><span class="pill ${e.state}">${stateLabel(e.state)}</span></td><td>${e.waitlist_seq??"—"}</td>
         <td class="muted">${reasonZh(e.reason)}</td>
         ${["ENROLLED","WAITLISTED","VALIDATED"].includes(e.state)
@@ -191,39 +223,83 @@ async function render(tab){
   }
   if(tab==="timetable"){
     const grid = (await api("/timetable/me")).body;
-    c.innerHTML = `<div class="card"><h3>每周课表（构造上保证无冲突）</h3>
-      ${grid.length? `<table><tr><th>星期</th><th>时间</th><th>课程</th><th>班次</th><th>地点</th></tr>
-      ${grid.map(g=>`<tr><td>${day(g.day)}</td><td>${hh(g.start_min)}–${hh(g.end_min)}</td>
-        <td><b>${g.course}</b></td><td>${g.section}</td><td>${g.venue}</td></tr>`).join("")}</table>`
-      : `<p class="muted">暂无已确认的选课记录。</p>`}</div>`;
+    const blocks = grid.map(g=>({ day:g.day, start_min:g.start_min, end_min:g.end_min,
+      name:g.title||g.course, sub:`${g.course}.${g.section}`+(g.venue? " · "+g.venue : ""),
+      tip:`${g.course} ${g.title||""} ${g.section} ${g.venue}` }));
+    c.innerHTML = `<div class="card"><h3>每周课表</h3>
+      ${weekGrid(blocks)}
+      ${grid.length? "" : `<p class="muted">本学期暂无已选课程。</p>`}</div>`;
+  }
+  if(tab==="degree"){
+    const r = await api("/degree/me");
+    if(r.status!==200){
+      c.innerHTML = `<div class="card"><h3>培养计划</h3>
+        <p class="muted">${reasonZh(r.body.detail?.code||"")}：${r.body.detail?.message||"读取失败"}</p></div>`;
+    } else {
+      const b=r.body, p=b.program;
+      const byCat = {};
+      (b.course_status||[]).forEach(g=>byCat[g.category]=g);
+      const catBlock = x => {
+        const g = byCat[x.category] || {courses:[]};
+        const showAll = x.rule_type==="all_of";     // 主修课程：列出全部课程及其修读状态
+        const rows = (g.courses||[]).filter(c=> showAll || c.status!=="未修");
+        const table = rows.length
+          ? `<table><tr><th>课程</th><th>学分</th><th>状态</th></tr>
+             ${rows.map(c=>`<tr><td>${esc(c.title)}<span class="code">${c.code}</span></td>
+               <td>${c.credits}</td>
+               <td><span class="pill ${CS_PILL[c.status]||"DROPPED"}">${c.status}</span></td></tr>`).join("")}</table>`
+          : `<p class="muted">暂未修读该类别课程。</p>`;
+        const extra = showAll
+          ? `已通过 ${x.met_count}/${(x.courses||[]).length} 门`
+          : `已修学分 ${x.credits_earned} · 尚缺 ${x.credits_needed} 学分`;
+        return `<div class="plan">
+          <div class="row" style="justify-content:space-between;margin:0">
+            <span><b>${x.category}</b>
+              <span class="muted">· ${RULE_TYPE_ZH[x.rule_type]||x.rule_type} · ${ruleReq(x)}</span></span>
+            <span class="pill ${degPill(x.status)}">${DEGREE_STATUS_ZH[x.status]||x.status}</span></div>
+          <p class="muted">${extra}</p>${table}</div>`;
+      };
+      c.innerHTML = `<div class="card"><h3>我的培养计划 — ${p.label}（v${p.version}）
+        <span class="pill ${degPill(b.status)}">${DEGREE_STATUS_ZH[b.status]||b.status}</span></h3>
+        <p class="muted">专业 ${b.major} · 已修 <b>${b.total_credits_earned}</b> / 要求
+         <b>${b.total_credits_required}</b> 学分 · 尚缺 <b>${b.total_credits_gap}</b> 学分</p>
+        ${b.rules.map(catBlock).join("")}
+        <div class="row" style="margin-top:12px"><button class="act" onclick="loadDegreePlan()">生成毕业路线图</button></div>
+        <div id="planRoute" class="muted">点击查看待修课程按先修顺序排入的未来学期。</div></div>`;
+    }
   }
   if(tab==="assistant"){
     const st = (await api("/agent/status")).body;
-    const badge = st.enabled ? `LLM 模式 · ${st.model}` : "离线规则模式（未配置 LLM）";
+    const badge = st.enabled ? `LLM 模式 · ${st.model}` : "离线规则模式";
     c.innerHTML = `<div class="card"><h3>智能选课助手 <span class="pill VALIDATED">${badge}</span></h3>
-      <p class="muted">助手只能通过工具读取系统事实（课程目录 / 成绩单 / 已选课 / 课表 / 约束策略链），
-      选课规划由<b>确定性规划智能体</b>完成。任何写操作都只会生成「待确认提案」，
-      必须由你点击确认后才经正常接口执行 —— 约束系统与权限控制无法被绕过。</p>
       <div class="row"><button class="act" onclick="agentPlan()">生成选课方案</button></div>
       <div class="row"><input id="agentMsg" style="flex:1"
-        placeholder="例如：帮我排一下下学期的课 / CS201 还有名额吗 / 把 CS201 退了">
+        placeholder="例如：帮我排一下下学期的课 / CS201 还有名额吗 / 把 CS201 退了"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();agentAsk();}">
         <button class="act" onclick="agentAsk()">提问</button></div>
       <div id="agentOut"></div></div>
-      <div class="card"><h3>规划智能体结构化输出（方案 A：确定性组合搜索）</h3>
-      <div id="planOut" class="muted">点击「生成选课方案」查看。</div></div>`;
+      <div class="card"><h3>规划智能体结构化输出</h3>
+      <div id="planOut"></div></div>`;
+    if(AGENT_LOG_HTML) document.getElementById("agentOut").innerHTML = AGENT_LOG_HTML;
+    if(PLAN_HTML){ document.getElementById("planOut").innerHTML = PLAN_HTML; syncPlanButtons(); }
   }
   if(tab==="roster"){
     const sections = (await api("/sections")).body;
-    c.innerHTML = `<div class="card"><h3>教学班名单（行级权限：仅本人执教班级）</h3>
+    c.innerHTML = `<div class="card"><h3>教学班名单</h3>
       <div class="row"><select id="rsec">${sections.map(s=>`<option value="${s.id}">#${s.id} ${s.course_code}.${s.section_no} — ${s.instructor_name}</option>`).join("")}</select>
       <button class="act" onclick="loadRoster()">加载名单</button></div><div id="rosterOut"></div></div>`;
   }
   if(tab==="admin"){
-    c.innerHTML = `<div class="card"><h3>阶段编排</h3>
+    c.innerHTML = `<div class="card"><h3>学期管理</h3>
+      <p class="muted">当前学期：<b>${ME.semester||"—"}</b>。推进后进入下一学期，系统按课程「常规开课学期」自动生成教学班；
+      跨学年时在读学生年级自动 +1。</p>
+      <div class="row"><button class="act" onclick="advanceSemester()">推进到下一学期</button>
+      <span class="muted" id="semMsg"></span></div></div>
+      <div class="card"><h3>阶段编排</h3>
       <p class="muted">线性阶段机：预选 → 抽签分配 → 补退选 → 截止。
-      每次阶段推进都会为下一阶段写入交接快照（handover snapshot）。</p>
+      每次阶段推进都会为下一阶段写入交接快照。</p>
       <div class="row"><button class="act" onclick="advancePhase()">推进阶段</button>
-      <button class="act" onclick="runAllocation()">运行批量抽签分配（种子随机）</button></div></div>
+      <button class="act" onclick="runAllocation()">运行批量抽签分配</button></div></div>
       <div class="grid2"><div class="card"><h3>全部选课记录</h3><div id="allEnr" class="muted">…</div></div>
       <div class="card"><h3>近期事件</h3><div id="evLog" class="muted">…</div></div></div>`;
     loadAdmin();
@@ -231,7 +307,7 @@ async function render(tab){
   if(tab==="audit"){
     const [audit, events] = await Promise.all([api("/admin/audit"), api("/admin/events")]);
     c.innerHTML = `<div class="grid2">
-      <div class="card"><h3>选课审计链（只追加，不可篡改）</h3><table>
+      <div class="card"><h3>选课审计链</h3><table>
       <tr><th>ID</th><th>选课</th><th>状态变更</th><th>操作者</th><th>原因</th></tr>
       ${audit.body.slice(0,40).map(a=>`<tr><td>${a.id}</td><td>#${a.enrollment_id}</td>
         <td>${STATE_ZH[a.from_state]||"∅"} → <b>${STATE_ZH[a.to_state]||a.to_state}</b><span class="code">${a.to_state}</span></td><td>${a.actor}</td>
@@ -256,12 +332,31 @@ async function render(tab){
 
 const day = d => DAY_ZH[d-1] || d;
 const hh  = m => String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
+/* 分钟区间 → 「第 X-Y 节」（与后端 curriculum.period_label 一致） */
+const periodLabel = (s,e) => {
+  const hit = PERIODS.filter(p => s < p.end && p.start < e);
+  if(!hit.length) return "";
+  const a=hit[0].n, b=hit[hit.length-1].n;
+  return a===b ? `第${a}节` : `第${a}-${b}节`;
+};
+const degPill = s => s==="satisfied" ? "ENROLLED" : s==="partial" ? "VALIDATED" : "REJECTED";
+const ruleReq = r => r.rule_type==="min_credits" ? `≥ ${r.min_credits} 学分`
+  : r.rule_type==="choose_n" ? `${(r.courses||[]).length} 门中选 ${r.min_courses} 门`
+  : `${(r.courses||[]).length} 门课程全部必修`;
 
-async function enroll(){
-  const r = await api("/enrollments",{method:"POST",body:JSON.stringify({section_id:+document.getElementById("sec").value})});
-  show(r.status===200, r.status===200? `请求状态：${STATE_ZH[r.body.state]||r.body.state}${r.body.waitlist_seq?"（候补序号 #"+r.body.waitlist_seq+"）":""}`
-    : `请求被拒绝：${reasonZh((r.body.detail?.code||"") + (r.body.detail?.message? "：":"")) }${r.body.detail?.message||""}`);
-  render("enroll");
+async function enrollSection(sectionId){
+  const r = await api("/enrollments",{method:"POST",body:JSON.stringify({section_id:sectionId})});
+  show(r.status===200, r.status===200
+    ? `已选课，当前状态：${STATE_ZH[r.body.state]||r.body.state}`
+    : `选课被拒绝：${reasonZh(r.body.detail?.code||"")}${r.body.detail?.message? "："+r.body.detail.message : ""}`);
+  render("enroll");                       // 课程行保留，按钮转为「退课」
+}
+async function enrollDrop(enrollmentId){
+  const r = await api(`/enrollments/${enrollmentId}/drop`,{method:"POST"});
+  show(r.status===200, r.status===200
+    ? `已退课，当前状态：${STATE_ZH[r.body.state]||r.body.state}`
+    : `退课失败：${reasonZh(r.body.detail?.message||r.body.detail?.code||"")}`);
+  render("enroll");                       // 预选阶段退课后可再次选课
 }
 async function drop(id){
   const r = await api(`/enrollments/${id}/drop`,{method:"POST"});
@@ -282,6 +377,27 @@ async function advancePhase(){
   else show(false, `${reasonZh(r.body.detail?.code||"")}：${r.body.detail?.message||""}`);
 }
 async function bootTabsKeepAdmin(){ buildTabs(); render("admin"); }
+async function advanceSemester(){
+  const r = await api("/admin/semester/advance",{method:"POST"});
+  if(r.status!==200){ show(false, `${reasonZh(r.body.detail?.code||"")}：${r.body.detail?.message||""}`); return; }
+  const b=r.body; ME.semester=b.semester; PHASE=b.phase;
+  document.getElementById("sem").textContent = b.semester;
+  document.getElementById("phasePill").innerHTML=`<span class="pill VALIDATED">${phaseLabel(PHASE)}</span>`;
+  show(true, `已推进：${b.previous} → ${b.semester}；自动开课 ${b.sections_created} 个教学班，升年级 ${b.students_promoted} 人`);
+  buildTabs(); render("admin");
+}
+async function loadDegreePlan(){
+  const r = await api("/degree/me/plan");
+  const el = document.getElementById("planRoute");
+  if(!el) return;
+  if(r.status!==200){ el.textContent = `${reasonZh(r.body.detail?.code||"")}：${r.body.detail?.message||"读取失败"}`; return; }
+  const b=r.body;
+  if(!b.feasible){ el.textContent = "不可行：" + (b.diagnostics||[]).map(d=>d.message).join("；"); return; }
+  if(!(b.semesters||[]).length){ el.textContent = "所有培养要求均已满足，无需补修。"; return; }
+  el.innerHTML = `<p class="muted">起始学期 ${b.start_semester} · 每学期学分上限 ${b.per_semester_cap}</p>`
+    + b.semesters.map(s=>`<div class="plan"><b>${s.semester}</b>（合计 ${s.total_credits} 学分）
+      <span class="muted"> ${s.courses.map(c=>`${c.code} ${esc(c.title)}（${c.credits}）`).join("、")}</span></div>`).join("");
+}
 async function runAllocation(){
   const r = await api("/admin/allocation/run?seed=42",{method:"POST"});
   if(r.status===200){
@@ -309,19 +425,97 @@ let AGENT_PENDING = [];
 const esc = s => String(s).replace(/[<>&]/g, c => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;" }[c]));
 // LLM 常带 Markdown；先转义再还原极少数行内样式，保证既不破版也无注入风险
 const md = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
-const slotText = ss => ss.map(s => day(s.day)+" "+hh(s.start_min)+"–"+hh(s.end_min)).join("，");
+/* ---- 周课表网格：列＝星期（周一…周日），行＝节次（第几节课） ----
+   后端以分钟记录上课区间（start_min/end_min），此处按标准作息把区间
+   映射到节次网格，多节次的课程用 rowspan 跨行显示。 */
+const PERIODS = [
+  { n:1,  start:480,  end:525  }, { n:2,  start:535,  end:580  },
+  { n:3,  start:600,  end:645  }, { n:4,  start:655,  end:700  },
+  { n:5,  start:840,  end:885  }, { n:6,  start:895,  end:940  },
+  { n:7,  start:960,  end:1005 }, { n:8,  start:1015, end:1060 },
+  { n:9,  start:1140, end:1185 }, { n:10, start:1195, end:1240 },
+];
+const overlapsP = (aS,aE,bS,bE) => aS < bE && bS < aE;
 
-async function agentPlan(){
-  const r = await api("/agent/plan",{method:"POST",body:JSON.stringify({top_k:3})});
-  if(r.status!==200){ show(false,"规划失败："+JSON.stringify(r.body.detail||r.body)); return; }
-  const b = r.body, plans = b.plans||[];
-  document.getElementById("planOut").innerHTML =
-    (plans.length ? plans.map(p=>`<div class="plan"><b>方案 ${p.rank}</b> — 合计 <b>${p.total_credits}</b> 学分
-      <table style="margin-top:6px"><tr><th>课程</th><th>学分</th><th>教学班</th><th>上课时间</th><th>余量</th><th>理由</th></tr>
-      ${p.picks.map(i=>`<tr><td><b>${i.course}</b> ${esc(i.title)}</td><td>${i.credits}</td><td>${i.section_no}</td>
-        <td>${slotText(i.slots)}</td><td>${i.free_seats}</td>
-        <td class="muted">${i.reasons.map(esc).join("；")}</td></tr>`).join("")}</table>
-      ${p.unlocks.length?`<p class="muted">修完后可解锁：${p.unlocks.join("、")}</p>`:""}</div>`).join("")
+function weekGrid(blocks){
+  const rows = PERIODS.length, cols = 7;
+  const cell = Array.from({length:rows},()=>Array(cols).fill(null));
+  const items = [];
+  for(const b of blocks||[]){
+    const idx = PERIODS.map((p,i)=>i)
+      .filter(i => overlapsP(PERIODS[i].start, PERIODS[i].end, b.start_min, b.end_min));
+    if(idx.length) items.push({...b, i0:idx[0], i1:idx[idx.length-1]});
+  }
+  items.sort((a,b)=> a.i0-b.i0 || a.start_min-b.start_min || String(a.name).localeCompare(String(b.name)));
+  for(const it of items){
+    const col = it.day-1;
+    if(col<0 || col>=cols || cell[it.i0][col]) continue;   // 越界或已占用则跳过
+    it.span = it.i1 - it.i0 + 1;
+    cell[it.i0][col] = it;
+    for(let r=it.i0+1; r<=it.i1; r++) cell[r][col] = "~";
+  }
+  const head = `<tr><th class="p">节次</th>` + DAY_ZH.map(d=>`<th>${d}</th>`).join("") + `</tr>`;
+  const body = PERIODS.map((p,r)=>{
+    let tds = `<td class="p">第${p.n}节<span class="code" style="margin:0">`
+            + `${hh(p.start)}–${hh(p.end)}</span></td>`;
+    for(let c=0; c<cols; c++){
+      const v = cell[r][c];
+      if(v === "~") continue;
+      if(!v){ tds += `<td class="empty"></td>`; continue; }
+      const tip = v.tip ? ` title="${esc(v.tip).replace(/"/g,'&quot;')}"` : "";
+      const act = v.action ? `<div style="margin-top:6px">${v.action}</div>` : "";
+      tds += `<td class="b" rowspan="${v.span}"${tip}><b>${esc(v.name)}</b>`
+           + (v.sub ? `<div class="code" style="margin:0">${esc(v.sub)}</div>` : "")
+           + act + `</td>`;
+    }
+    return `<tr>${tds}</tr>`;
+  }).join("");
+  return `<table class="tt">${head}${body}</table>`;
+}
+
+let PLAN_ENR = {};    // section_id -> 本学期有效选课记录（含上课时段），供方案表格判定与作图
+let PLAN_HTML = "";   // 上次生成的方案 HTML：切页签后回来可直接恢复
+let AGENT_LOG_HTML = "";  // 智能选课助手对话流（提问 + 回复）：切页签后回来可直接恢复
+const ACTIVE_STATES = ["ENROLLED","WAITLISTED","VALIDATED","SUBMITTED"];
+
+async function refreshPlanEnr(){   // 拉取本人本学期的有效选课，供方案表格判定与作图
+  const mine = await api("/enrollments/me");
+  PLAN_ENR = {};
+  (mine.status===200 ? mine.body : []).forEach(e=>{
+    if(e.semester===ME.semester && ACTIVE_STATES.includes(e.state)) PLAN_ENR[e.section_id] = e;
+  });
+}
+
+/* 规划结果 → 周课表表格 + 每门课下方的选课/退课按钮（离线与 LLM 两条路径共用） */
+function plansHtml(b){
+  const plans = b.plans || [];
+  return (plans.length ? plans.map(p=>{
+      const blocks = [];
+      p.picks.forEach(i=>{
+        const btn = PLAN_ENR[i.section_id]
+          ? `<button class="act red" data-sid="${i.section_id}" onclick="planDrop(${i.section_id})">退课</button>`
+          : `<button class="act" data-sid="${i.section_id}" onclick="planEnroll(${i.section_id})">选课</button>`;
+        i.slots.forEach(s=>blocks.push({
+          day:s.day, start_min:s.start_min, end_min:s.end_min, name:i.title,
+          sub:`${i.section_no} · ${i.venue}`,
+          tip:`${i.title}（${i.credits} 学分，余 ${i.free_seats} 席）：`+i.reasons.join("；"),
+          action:btn}));
+      });
+      // 把「已经选中/在修」的课程也画进表格：学生看到的是完整的一周，
+      // 并且这些课的就地按钮同样是「退课」，不改动方案本身。
+      const pickedIds = p.picks.map(i=>i.section_id);
+      Object.values(PLAN_ENR).forEach(e=>{
+        if(!e.slots || pickedIds.includes(e.section_id)) return;
+        e.slots.forEach(s=>blocks.push({
+          day:s.day, start_min:s.start_min, end_min:s.end_min, name:e.title,
+          sub:`${e.section_no} · ${e.venue} · 已选`,
+          tip:`${e.title}（已选中/在修，${e.credits} 学分）`,
+          action:`<button class="act red" data-sid="${e.section_id}" onclick="planDrop(${e.section_id})">退课</button>`}));
+      });
+      return `<div class="plan"><b>方案 ${p.rank}</b> — 合计 <b>${p.total_credits}</b> 学分
+      ${weekGrid(blocks)}
+      ${p.unlocks.length?`<p class="muted">修完后可解锁：${p.unlocks.join("、")}</p>`:""}</div>`;
+    }).join("")
       : `<p class="muted">当前没有可行的选课组合方案。</p>`)
     + ((b.excluded_from_best_plan||[]).length ? `<p class="muted">未纳入第 1 方案：`
         + b.excluded_from_best_plan.map(e=>`${e.course}（${e.reason_code}）`).join("、")+`</p>` : "")
@@ -329,20 +523,72 @@ async function agentPlan(){
         + b.blocked_by_prerequisites.map(e=>`${e.course}（缺 ${e.missing_prerequisites.join("、")}）`).join("、")+`</p>` : "");
 }
 
+function showPlans(b){
+  const html = plansHtml(b);
+  document.getElementById("planOut").innerHTML = html;
+  PLAN_HTML = html;
+}
+
+async function agentPlan(){
+  const [r] = await Promise.all([
+    api("/agent/plan",{method:"POST",body:JSON.stringify({top_k:3})}),
+    refreshPlanEnr()]);
+  if(r.status!==200){ show(false,"规划失败："+JSON.stringify(r.body.detail||r.body)); return; }
+  showPlans(r.body);
+}
+
+function syncPlanButtons(){   // 仅就地切换按钮状态，不重跑规划（保持课程行可见）
+  document.querySelectorAll("#planOut button[data-sid]").forEach(b=>{
+    const sid = Number(b.dataset.sid), active = !!PLAN_ENR[sid];
+    b.className = "act" + (active ? " red" : "");
+    b.textContent = active ? "退课" : "选课";
+    b.onclick = active ? (()=>planDrop(sid)) : (()=>planEnroll(sid));
+  });
+  const el = document.getElementById("planOut"); if(el) PLAN_HTML = el.innerHTML;
+}
+async function planEnroll(sectionId){
+  const r = await api("/enrollments",{method:"POST",body:JSON.stringify({section_id:sectionId})});
+  if(r.status===200){
+    PLAN_ENR[sectionId] = {id:r.body.id, state:r.body.state};
+    show(true, `已选课，当前状态：${STATE_ZH[r.body.state]||r.body.state}`
+      + (r.body.waitlist_seq ? `（候补序号 #${r.body.waitlist_seq}）` : ""));
+    syncPlanButtons();
+  } else {
+    show(false, `选课被拒绝：${reasonZh(r.body.detail?.code||"")}`
+      + (r.body.detail?.message ? "："+r.body.detail.message : ""));
+  }
+}
+async function planDrop(sectionId){
+  const e = PLAN_ENR[sectionId];
+  if(!e) return;
+  const r = await api(`/enrollments/${e.id}/drop`,{method:"POST"});
+  if(r.status===200){ delete PLAN_ENR[sectionId]; show(true,"退课成功"); syncPlanButtons(); }
+  else show(false, `退课失败：${r.body.detail?.message||JSON.stringify(r.body)}`);
+}
+
 async function agentAsk(){
   const el = document.getElementById("agentMsg");
   const msg = (el.value||"").trim();
   if(!msg) return;
-  const r = await api("/agent/chat",{method:"POST",body:JSON.stringify({message:msg})});
+  el.value = "";                       // 取出输入后立即清空，便于连续提问
+  const [r] = await Promise.all([
+    api("/agent/chat",{method:"POST",body:JSON.stringify({message:msg})}),
+    refreshPlanEnr()]);
   if(r.status!==200){ show(false,"提问失败："+JSON.stringify(r.body.detail||r.body)); return; }
   const b = r.body; AGENT_PENDING = b.pending_actions||[];
   const tools = (b.tool_trace||[]).map(t=>`<span class="tool">${t.tool} · ${t.status}</span>`).join("");
   const proposals = AGENT_PENDING.map((a,i)=>`<div class="proposal">${esc(a.summary)}
       <button class="act" style="margin-left:8px" onclick="agentConfirm(${i})">确认执行</button></div>`).join("");
-  document.getElementById("agentOut").innerHTML =
-    `<div class="row"><span class="pill VALIDATED">${b.mode==="llm"?("LLM · "+b.model):"离线规则模式"}</span>${tools}</div>`
+  const turnHtml =
+    `<div class="row" style="margin-top:12px"><span class="pill">我</span><b>${esc(msg)}</b></div>`
+    + `<div class="row"><span class="pill VALIDATED">${b.mode==="llm"?("LLM · "+b.model):"离线规则模式"}</span>${tools}</div>`
     + (b.note?`<p class="muted">${esc(b.note)}</p>`:"")
-    + `<div class="reply" style="margin-top:8px">${md(b.reply)}</div>` + proposals;
+    + `<div class="reply" style="margin-top:6px">${md(b.reply)}</div>` + proposals;
+  AGENT_LOG_HTML += turnHtml;      // 提问与回复一起留在对话流里，切页签也不丢
+  document.getElementById("agentOut").innerHTML = AGENT_LOG_HTML;
+  // LLM 若调用了规划工具，把结构化方案同样渲染成「周课表 + 可退/选课」的表格
+  const planned = (b.tool_trace||[]).find(t=>t.tool==="plan_courses" && t.status==="ok");
+  if(planned && planned.result && planned.result.result) showPlans(planned.result.result);
 }
 
 async function agentConfirm(i){
@@ -360,16 +606,15 @@ async function agentConfirm(i){
   box.style.display = "block";
   box.textContent = "写操作结果：" + msg;
   document.getElementById("agentOut").appendChild(box);
+  AGENT_LOG_HTML = document.getElementById("agentOut").innerHTML;
+  await refreshPlanEnr(); syncPlanButtons();   // 方案表格的选/退按钮同步最新状态
 }
 
 if(localStorage.token){ TOKEN=localStorage.token;
-  api("/auth/me").then(r=>{ if(r.status===200){ ME=r.body;
+  api("/auth/me").then(r=>{ if(r.status===200){
     document.getElementById("loginView").style.display="none";
     document.getElementById("appView").style.display="block";
-    document.getElementById("whoami").textContent=`${ME.full_name}（${ROLE_ZH[ME.role]||ME.role}）`;
-    api("/admin/phase").then(p=>{ if(p.status===200){PHASE=p.body.phase;
-      document.getElementById("phasePill").innerHTML=`<span class="pill VALIDATED">${phaseLabel(PHASE)}</span>`;}
-      buildTabs(); render(); });
+    boot();
   } else localStorage.clear(); });
 }
 </script>

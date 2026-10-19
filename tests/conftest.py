@@ -77,6 +77,17 @@ def env(tmp_path):
             course_code="MATH101", semester=SEM, section_no="01",
             instructor_name="Erin Liu", capacity=30, venue="MA-1",
             slots=[slot(2, 510, 650)]))
+
+        # 培养方案：一份 CS 版本，覆盖 all_of / choose_n / min_credits 三类规则
+        repo.deactivate_degree_versions(conn, "CS")
+        rid = repo.create_degree_requirement(conn, "CS", 120.0,
+                                             "计算机科学培养方案 v1")
+        repo.append_degree_rule(conn, rid, "专业必修", "all_of",
+                                ["CS101", "CS201"], None, None, 0)
+        repo.append_degree_rule(conn, rid, "数学基础", "min_credits",
+                                ["MATH101"], 4.0, None, 1)
+        repo.append_degree_rule(conn, rid, "专业选修", "choose_n",
+                                ["CS201", "EE210"], None, 1, 2)
     finally:
         conn.close()
 

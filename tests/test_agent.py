@@ -13,6 +13,7 @@ Seed world 见 tests/conftest.py。所有用例都不依赖网络与 LLM：
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -155,6 +156,36 @@ def test_agent_status_reports_offline_mode_without_api_key(env, monkeypatch):
     monkeypatch.delenv("AGENT_LLM_API_KEY", raising=False)
     body = env["client"].get("/api/agent/status", headers=hdr(env, "alice")).json()
     assert body == {"enabled": False, "mode": "offline", "model": None}
+
+
+# ------------------------------------------------------------ .env.local 载入
+def test_load_local_env_reads_bare_key_and_pairs(tmp_path, monkeypatch):
+    """`.env.local` 支持 KEY=VALUE 与「一行裸密钥」，且不覆盖已有环境变量。"""
+    from app.main import load_local_env
+
+    monkeypatch.delenv("AGENT_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("AGENT_LLM_MODEL", raising=False)
+    monkeypatch.setenv("AGENT_LLM_BASE_URL", "https://env.example/v1")
+
+    env_file = tmp_path / ".env.local"
+    env_file.write_text(
+        "# 注释行\n\nsk-bare-key\n"
+        "AGENT_LLM_MODEL=demo-model\n"
+        "AGENT_LLM_BASE_URL=https://file.example/v1\n",
+        encoding="utf-8")
+    load_local_env(env_file)
+
+    assert os.environ["AGENT_LLM_API_KEY"] == "sk-bare-key"
+    assert os.environ["AGENT_LLM_MODEL"] == "demo-model"
+    assert os.environ["AGENT_LLM_BASE_URL"] == "https://env.example/v1"
+
+
+def test_load_local_env_missing_file_is_noop(tmp_path, monkeypatch):
+    from app.main import load_local_env
+
+    monkeypatch.delenv("AGENT_LLM_API_KEY", raising=False)
+    load_local_env(tmp_path / "does-not-exist")
+    assert "AGENT_LLM_API_KEY" not in os.environ
 
 
 def test_chat_plan_intent_uses_planner_tool(env):

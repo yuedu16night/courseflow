@@ -14,6 +14,7 @@ PERMISSIONS: dict[str, set[Role]] = {
     # read
     "catalog:read":       {Role.STUDENT, Role.INSTRUCTOR, Role.REGISTRAR, Role.ADMIN},
     "timetable:read_own": {Role.STUDENT},
+    "degree:read":        {Role.STUDENT, Role.REGISTRAR, Role.ADMIN},
     "enroll:read_own":    {Role.STUDENT},
     "enroll:read_all":    {Role.REGISTRAR, Role.ADMIN},
     "roster:read_own":    {Role.INSTRUCTOR},
@@ -25,8 +26,10 @@ PERMISSIONS: dict[str, set[Role]] = {
     "agent:use":          {Role.STUDENT},
     # registrar actions
     "catalog:write":      {Role.REGISTRAR},
+    "degree:write":       {Role.REGISTRAR, Role.ADMIN},
     "section:write":      {Role.REGISTRAR},
     "phase:advance":      {Role.REGISTRAR},
+    "semester:advance":   {Role.REGISTRAR, Role.ADMIN},
     "allocation:run":     {Role.REGISTRAR},
     "enroll:force":       {Role.REGISTRAR},
     # admin actions

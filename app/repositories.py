@@ -40,6 +40,7 @@ def _row_to_user(row) -> dict:
         "full_name": row["full_name"],
         "role": row["role"],
         "major": row["major"],
+        "grade": row["grade"] if "grade" in row.keys() else None,
         "max_credits": row["max_credits"],
         "completed_courses": set(json.loads(row["completed_courses"])),
     }
@@ -47,12 +48,12 @@ def _row_to_user(row) -> dict:
 
 # -- users -----------------------------------------------------------------
 def create_user(conn, username, password, full_name, role,
-                major=None, max_credits=35, completed=None) -> int:
+                major=None, max_credits=35, completed=None, grade=None) -> int:
     cur = conn.execute(
         "INSERT INTO users (username, password_hash, full_name, role, major,"
-        " max_credits, completed_courses) VALUES (?,?,?,?,?,?,?)",
+        " grade, max_credits, completed_courses) VALUES (?,?,?,?,?,?,?,?)",
         (username, hash_password(password), full_name, role, major,
-         max_credits, json.dumps(sorted(completed or []))),
+         grade, max_credits, json.dumps(sorted(completed or []))),
     )
     conn.commit()
     return cur.lastrowid
@@ -73,6 +74,11 @@ def set_completed_courses(conn, user_id, completed: set[str]) -> None:
         "UPDATE users SET completed_courses=? WHERE id=?",
         (json.dumps(sorted(completed)), user_id),
     )
+    conn.commit()
+
+
+def update_user_grade(conn, user_id, grade) -> None:
+    conn.execute("UPDATE users SET grade=? WHERE id=?", (grade, user_id))
     conn.commit()
 
 
@@ -125,6 +131,33 @@ def get_semester(conn, code: str):
     }
 
 
+# -- app settings (runtime config, e.g. the active semester) ---------------
+CURRENT_SEMESTER_KEY = "current_semester"
+
+
+def get_setting(conn, key: str, default=None):
+    row = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(conn, key: str, value) -> None:
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?,?)"
+        " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, str(value)),
+    )
+    conn.commit()
+
+
+def get_current_semester(conn, default: str = "2026FA") -> str:
+    """库内当前学期（可随「推进学期」改变）；未设置时返回初始默认。"""
+    return get_setting(conn, CURRENT_SEMESTER_KEY, default)
+
+
+def set_current_semester(conn, code: str) -> None:
+    set_setting(conn, CURRENT_SEMESTER_KEY, code)
+
+
 # -- catalog (courses) -----------------------------------------------------
 def create_course_version(conn, data: dict) -> tuple[int, int]:
     """Insert a new catalog version for a course code and deactivate the
@@ -140,9 +173,11 @@ def create_course_version(conn, data: dict) -> tuple[int, int]:
             (data["code"], new_version - 1),
         )
     cur = conn.execute(
-        "INSERT INTO courses (code, title, credits, department, prerequisites,"
-        " description, catalog_version, active) VALUES (?,?,?,?,?,?,?,1)",
+        "INSERT INTO courses (code, title, credits, department, category, term,"
+        " prerequisites, description, catalog_version, active)"
+        " VALUES (?,?,?,?,?,?,?,?,?,1)",
         (data["code"], data["title"], data["credits"], data["department"],
+         data.get("category", ""), data.get("term", "FA"),
          json.dumps(data.get("prerequisites", [])), data.get("description", ""),
          new_version),
     )
@@ -176,12 +211,15 @@ def course_graph(conn) -> dict[str, set[str]]:
 
 
 def _row_to_course(row) -> dict:
+    keys = row.keys()
     return {
         "id": row["id"],
         "code": row["code"],
         "title": row["title"],
         "credits": row["credits"],
         "department": row["department"],
+        "category": row["category"] if "category" in keys else "",
+        "term": row["term"] if "term" in keys else "FA",
         "prerequisites": json.loads(row["prerequisites"]),
         "description": row["description"],
         "catalog_version": row["catalog_version"],
@@ -294,6 +332,15 @@ def count_enrolled(conn, section_id: int) -> int:
     return row["n"]
 
 
+def count_active_enrollments(conn, section_id: int) -> int:
+    """当前对该教学班的有效选课人数（含预选已校验 VALIDATED 的意向）。"""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM enrollments WHERE section_id=? AND state IN"
+        " ('SUBMITTED','VALIDATED','ENROLLED','WAITLISTED')", (section_id,),
+    ).fetchone()
+    return row["n"]
+
+
 def next_waitlist_seq(conn, section_id: int) -> int:
     row = conn.execute(
         "SELECT COALESCE(MAX(waitlist_seq),0)+1 AS seq FROM enrollments"
@@ -332,6 +379,103 @@ def list_audit(conn, enrollment_id=None) -> list[dict]:
             "SELECT * FROM enrollment_audit ORDER BY id DESC LIMIT 200"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# -- degree requirements (versioned registry, immutable per version) -------
+def create_degree_requirement(conn, major, total_credits_min, label) -> int:
+    """Insert a NEW immutable version for a major (version = MAX + 1)."""
+    row = conn.execute(
+        "SELECT MAX(version) AS v FROM degree_requirements WHERE major=?",
+        (major,),
+    ).fetchone()
+    new_version = (row["v"] or 0) + 1
+    cur = conn.execute(
+        "INSERT INTO degree_requirements (major, version, active,"
+        " total_credits_min, label) VALUES (?,?,1,?,?)",
+        (major, new_version, total_credits_min, label),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def append_degree_rule(conn, requirement_id, category, rule_type, courses,
+                       min_credits, min_courses, sort_order) -> int:
+    cur = conn.execute(
+        "INSERT INTO degree_requirement_rules (requirement_id, category,"
+        " rule_type, courses, min_credits, min_courses, sort_order)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (requirement_id, category, rule_type, json.dumps(sorted(courses)),
+         min_credits, min_courses, sort_order),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def deactivate_degree_versions(conn, major) -> None:
+    conn.execute(
+        "UPDATE degree_requirements SET active=0 WHERE major=?", (major,)
+    )
+    conn.commit()
+
+
+def _row_to_degree_requirement(row) -> dict:
+    return {
+        "id": row["id"],
+        "major": row["major"],
+        "version": row["version"],
+        "active": bool(row["active"]),
+        "total_credits_min": row["total_credits_min"],
+        "label": row["label"],
+    }
+
+
+def _row_to_degree_rule(row) -> dict:
+    return {
+        "id": row["id"],
+        "requirement_id": row["requirement_id"],
+        "category": row["category"],
+        "rule_type": row["rule_type"],
+        "courses": json.loads(row["courses"]),
+        "min_credits": row["min_credits"],
+        "min_courses": row["min_courses"],
+        "sort_order": row["sort_order"],
+    }
+
+
+def _load_degree_rules(conn, requirement_id) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM degree_requirement_rules WHERE requirement_id=?"
+        " ORDER BY sort_order, id", (requirement_id,),
+    ).fetchall()
+    return [_row_to_degree_rule(r) for r in rows]
+
+
+def list_degree_requirements(conn, major: str | None = None,
+                             active_only: bool = True) -> list[dict]:
+    sql, params = "SELECT * FROM degree_requirements WHERE 1=1", []
+    if major:
+        sql += " AND major=?"; params.append(major)
+    if active_only:
+        sql += " AND active=1"
+    rows = conn.execute(sql + " ORDER BY major, version", params).fetchall()
+    out = []
+    for row in rows:
+        req = _row_to_degree_requirement(row)
+        req["rules"] = _load_degree_rules(conn, req["id"])
+        out.append(req)
+    return out
+
+
+def get_active_degree_requirement(conn, major: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM degree_requirements WHERE major=? AND active=1"
+        " ORDER BY version DESC LIMIT 1", (major,),
+    ).fetchone()
+    if row is None:
+        return None
+    req = _row_to_degree_requirement(row)
+    req["rules"] = _load_degree_rules(conn, req["id"])
+    return req
 
 
 def append_event(conn, event_type: str, payload: dict) -> None:

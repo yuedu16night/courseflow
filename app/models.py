@@ -16,6 +16,7 @@ class UserIn(BaseModel):
     full_name: str = Field(min_length=1, max_length=64)
     role: str = Field(pattern="^(student|instructor|registrar|admin)$")
     major: str | None = None
+    grade: int | None = Field(default=None, ge=1, le=4)   # 年级 1..4（大一..大四）
     max_credits: int = Field(default=35, ge=1, le=60)
 
 
@@ -48,6 +49,8 @@ class CourseIn(BaseModel):
     title: str = Field(min_length=2, max_length=128)
     credits: float = Field(ge=0.5, le=12)
     department: str = Field(min_length=2, max_length=64)
+    category: str = Field(default="", max_length=32)      # 课程类别（培养方案口径）
+    term: str = Field(default="FA", pattern="^(FA|SP)$")  # 常规开课学期
     prerequisites: list[str] = Field(default_factory=list)
     description: str = ""
 
@@ -83,3 +86,28 @@ class AgentActionIn(BaseModel):
     """用户确认后的写操作：只接受白名单工具与参数。"""
     tool: str = Field(pattern="^(submit_enrollment|drop_enrollment)$")
     args: dict = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# degree requirements & timetable planning (formal input contracts)
+# ---------------------------------------------------------------------------
+class DegreeRuleIn(BaseModel):
+    """培养方案的一条规则行。"""
+    category: str = Field(min_length=1, max_length=64)
+    rule_type: str = Field(pattern="^(all_of|choose_n|min_credits)$")
+    courses: list[str] = Field(default_factory=list)
+    min_credits: float | None = Field(default=None, ge=0)
+    min_courses: int | None = Field(default=None, ge=0)
+
+
+class DegreeRequirementIn(BaseModel):
+    """教务新建培养方案版本：major 相同即产生新版本（旧版本自动失效）。"""
+    major: str = Field(min_length=1, max_length=64)
+    total_credits_min: float = Field(ge=0)
+    label: str = Field(default="", max_length=128)
+    rules: list[DegreeRuleIn] = Field(min_length=1)
+
+
+class TimetablePlanIn(BaseModel):
+    """无冲突课表规划入参：给定本学期要上的课程代码集合。"""
+    course_codes: list[str] = Field(min_length=1)
