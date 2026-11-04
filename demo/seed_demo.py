@@ -1,10 +1,12 @@
 """End-to-end demo: seeds a realistic semester and walks a scripted
 scenario through the public REST API, printing a human-readable trace.
 
-Run:  python demo/seed_demo.py [db_path] [--seed-only]
+Run:  python demo/seed_demo.py [db_path] [--seed-only | --live-prep]
       --seed-only populates users/transcripts/courses/degree programs/sections
       and leaves the current semester in pre_enrollment (ideal before starting
       the live server).
+      --live-prep 额外创建演示者账号 `demo` 并预置其他学生的志愿，
+      学期停在 pre_enrollment —— 现场由演示者自己完成选课/退课/推进阶段。
 Output: console + docs/demo_trace.md (execution evidence for the report)
 
 教学建模要点（与需求对应）：
@@ -221,10 +223,36 @@ STUDENTS = [
     ("erin", "赵一鸣", "EE", 2, {"MATH101", "MATH102", "MATH201", "CS101",
                                  "GE101", "GE102", "GE201", "GE202",
                                  "GE203", "GE204"}),
+    # 用于演示「报名人数超出容量 → 按种子随机抽签分配」的同年级学生
+    ("frank", "孙博文", "CS", 2, {"CS101"}),
+    ("grace", "周雨桐", "CS", 2, {"CS101"}),
+    ("heidi", "吴佳怡", "CS", 2, {"CS101"}),
+    ("ivan", "郑浩然", "CS", 2, {"CS101"}),
+    ("judy", "王安琪", "CS", 2, {"CS101"}),
+    ("karl", "冯子轩", "CS", 2, {"CS101"}),
+    ("lena", "许若曦", "CS", 2, {"CS101"}),
+    ("mason", "邓皓宇", "CS", 2, {"CS101"}),
 ]
 
 GRADE_ZH = {1: "大一", 2: "大二", 3: "大三", 4: "大四"}
 FIRST_SEMESTER = "2026FA"
+
+# ---------------------------------------------------------------------------
+# 现场演示（--live-prep）：留一个空账号给演示者当场操作，其余学生提前填好志愿
+# ---------------------------------------------------------------------------
+#: 演示者账号：大二 CS，已修 6 门（先修充足），学分上限压到 10 便于现场触发
+#: CREDIT_LIMIT；账号本身不预置任何选课记录。
+LIVE_STUDENT = ("demo", "演示同学", "CS", 2,
+                {"CS101", "MATH101", "MATH102", "MATH201", "GE101", "GE102"})
+LIVE_MAX_CREDITS = 10
+#: CS201.01（容量 2）的 10 份预置志愿 —— 演示者现场提交第 11 份
+LIVE_CS201_VOLUNTEERS = ["bob", "erin", "frank", "grace", "heidi",
+                         "ivan", "judy", "karl", "lena", "mason"]
+#: CS104.01（容量 1）的 3 份预置志愿：抽签后 1 人录取、2 人候补，
+#: 演示者现场再选会看到「已满 → 候补」
+LIVE_CS104_VOLUNTEERS = ["judy", "karl", "lena"]
+#: 预先演算好的种子：11 人抢 2 席时演示者中签，退课才能触发候补晋升
+LIVE_SEED = 7
 
 
 def dept_of(code: str) -> str:
@@ -291,18 +319,27 @@ def program_rules(core_pool, elective_pool, cross, gened, personal):
     ]
 
 
-def main(db_path: Path | None = None, seed_only: bool = False) -> None:
+def main(db_path: Path | None = None, seed_only: bool = False,
+         live_prep: bool = False) -> None:
     db_path = db_path or DB
     if db_path.exists():
         db_path.unlink()
     app = create_app(db_path)
     client = TestClient(app)
 
-    say("# CourseFlow — 端到端执行轨迹"
-        if not seed_only else "# CourseFlow — 数据初始化摘要")
-    say()
-    say("由 `demo/seed_demo.py` 针对 REST API 执行的脚本化演示。"
-        if not seed_only else f"数据库 `{db_path.name}` 已初始化；学期处于 pre_enrollment 阶段。")
+    if live_prep:
+        say("# CourseFlow — 现场演示数据准备")
+        say()
+        say(f"数据库 `{db_path.name}` 已重建：课程 / 培养方案 / 教学班就绪，"
+            f"其他学生的志愿已预置，学期停在 pre_enrollment。")
+    elif seed_only:
+        say("# CourseFlow — 数据初始化摘要")
+        say()
+        say(f"数据库 `{db_path.name}` 已初始化；学期处于 pre_enrollment 阶段。")
+    else:
+        say("# CourseFlow — 端到端执行轨迹")
+        say()
+        say("由 `demo/seed_demo.py` 针对 REST API 执行的脚本化演示。")
     say()
 
     def call(method, path, token=None, label=None, expect=200, **kw):
@@ -377,7 +414,7 @@ def main(db_path: Path | None = None, seed_only: bool = False) -> None:
     courses = client.get("/api/courses", headers={"Authorization": f"Bearer {reg}"}).json()
     offering = build_offering(courses, FIRST_SEMESTER,
                               capacity=60,
-                              capacity_by_code={"CS201": 1, "CS104": 1})
+                              capacity_by_code={"CS201": 2, "CS104": 1})
     S_CS201 = S_CS104 = None
     for sec in offering:
         r = call("post", "/sections", reg,
@@ -394,6 +431,9 @@ def main(db_path: Path | None = None, seed_only: bool = False) -> None:
         f"{sample['slots'][0]['end_min']} 分钟）")
     say()
     if seed_only:
+        return
+    if live_prep:
+        _prepare_live_demo(client, app, reg, S_CS201, S_CS104, call)
         return
 
     # ------------------------------------------------ semantic guards ----
@@ -417,10 +457,12 @@ def main(db_path: Path | None = None, seed_only: bool = False) -> None:
     say()
 
     # ------------------------------------------------- stage handover ----
-    say("## 3. 多阶段编排：pre_enrollment → allocation（带种子抽签）")
-    for who in ["bob", "erin"]:
+    say("## 3. 多阶段编排：pre_enrollment → allocation（人数超容 → 种子随机分配）")
+    lottery = ["bob", "erin", "frank", "grace", "heidi",
+               "ivan", "judy", "karl", "lena", "mason"]
+    for who in lottery:
         call("post", "/enrollments", tok(client, who),
-             f"{who} 填报志愿 CS201.01（容量 1）", json={"section_id": S_CS201})
+             f"{who} 填报志愿 CS201.01（容量 2）", json={"section_id": S_CS201})
     call("post", "/enrollments", tok(client, "charlie"),
          "charlie 填报志愿 CS201.01", expect=400, json={"section_id": S_CS201})
     say("    - REJECTED: ALREADY_PASSED —— 已通过课程不允许重修选课")
@@ -430,6 +472,16 @@ def main(db_path: Path | None = None, seed_only: bool = False) -> None:
     r = call("post", "/admin/allocation/run?seed=42", reg,
              "教务运行带种子的批量分配")
     say(f"    - 分配结果：{r.json()['sections']['CS201.01']}")
+    rows = client.get(f"/api/enrollments?semester={FIRST_SEMESTER}",
+                      headers={"Authorization": f"Bearer {reg}"}).json()
+    won = sorted(e["student"] for e in rows
+                 if e["section"] == "CS201.01" and e["state"] == "ENROLLED")
+    wait = sorted(e["student"] for e in rows
+                  if e["section"] == "CS201.01" and e["state"] == "WAITLISTED")
+    say(f"    - seed=42 抽签结果：{', '.join(won)} 录取；"
+        f"{len(wait)} 人进入候补（{', '.join(wait)}）")
+    say("    - 分配对全部合格志愿按 `random.Random(seed).shuffle` 洗牌后取前 N 名，"
+        "同一 seed 完全可复现")
     say()
 
     # ------------------------------------------------------ add/drop ----
@@ -510,6 +562,68 @@ def main(db_path: Path | None = None, seed_only: bool = False) -> None:
         f"（grade={me['grade']}）；当前学期 {me['semester']}，阶段 {me['phase']}")
 
 
+def _prepare_live_demo(client, app, reg, s_cs201, s_cs104, call):
+    """为现场演示做最后一步：建演示者账号 + 预置其他学生的志愿。
+
+    关键点是「演示者之外的学生提前填好」：他们的志愿在 pre_enrollment
+    阶段以 VALIDATED 存在，抽签时才产生录取/候补；演示者账号保持空白，
+    现场自己走选课、退课、看课表这一套。
+    """
+    name, full, major, grade, done = LIVE_STUDENT
+    conn = app.state.db_factory()
+    try:
+        if repo.get_user_by_username(conn, name) is None:
+            repo.create_user(conn, name, name + "123", full, "student",
+                             major=major, max_credits=LIVE_MAX_CREDITS,
+                             completed=done, grade=grade)
+    finally:
+        conn.close()
+    say(f"- 演示者账号 `{name}` / `{name}123`（{GRADE_ZH[grade]}{major}，"
+        f"已修 {len(done)} 门，学分上限 {LIVE_MAX_CREDITS}）")
+    say()
+
+    for who in LIVE_CS201_VOLUNTEERS:
+        call("post", "/enrollments", tok(client, who),
+             f"预置志愿 {who} → CS201.01（容量 2）", json={"section_id": s_cs201})
+    for who in LIVE_CS104_VOLUNTEERS:
+        call("post", "/enrollments", tok(client, who),
+             f"预置志愿 {who} → CS104.01（容量 1）", json={"section_id": s_cs104})
+    say(f"- 已预置 CS201.01 志愿 {len(LIVE_CS201_VOLUNTEERS)} 份、"
+        f"CS104.01 志愿 {len(LIVE_CS104_VOLUNTEERS)} 份；"
+        f"演示者账号尚无任何选课记录")
+    say()
+
+    say("## 现场演示脚本（网页操作，括号内为预期结果）")
+    say(f"**以 {name} 登录**，阶段 pre_enrollment：")
+    say("1. 预选「数据结构与算法 CS201.01」→ VALIDATED（占住周一1-2 / 周五9-10）")
+    say("2. 预选「认知科学导论 IC303.01」→ TIMETABLE_CONFLICT（与 CS201 的周五9-10 重叠）")
+    say("3. 预选「数字逻辑 CS222.01」→ VALIDATED（学分 8/10）")
+    say("4. 预选「计算机网络 CS301.01」→ PREREQ_MISSING（缺 CS202）")
+    say("5. 预选「程序设计基础 CS101.01」→ ALREADY_PASSED（已修课程不允许重修）")
+    say("6. 再点一次 CS201.01 → DUPLICATE_ENROLLMENT")
+    say("7. 预选「软件测试 CS313.01」→ 8+3 > 10，CREDIT_LIMIT")
+    say("**切换 registrar：**")
+    say(f"8. 推进阶段 → allocation；运行分配（seed={LIVE_SEED}）→ "
+        f"CS201 录取 grace 与你，其余 8 人候补")
+    say("9. 推进阶段 → add_drop")
+    say(f"**切回 {name}：**")
+    say("10. 选「计算思维导论 CS104.01」（已被 1 人占满）→ WAITLISTED，候补序号 3")
+    say("11. 退掉 CS201.01 → `section.seat_released` → 候补队首 ivan 自动晋升（零轮询）")
+    say("12. 选「程序设计进阶 CS106.01」→ ENROLLED（学分 10/10，正好顶到上限）")
+    say("13. 打开「我的课表」「培养计划」两个页签")
+    say("**切换 registrar：**")
+    say("14. 推进阶段 → closed")
+    say(f"**切回 {name}：**")
+    say("15. 再选「大学英语(一) GE201.01」→ PHASE_LOCKED（学期已冻结）")
+    say()
+    say(f"说明：seed={LIVE_SEED} 是预先演算好的 —— 11 人抢 2 席时你会中签，"
+        f"这样第 11 步才有座位可退、候补晋升才看得到；同一 seed 重跑结果完全一致"
+        f"（换成 42 你会排第 5，只能进候补）。")
+    say()
+    say(f"启动：`python run.py` → http://127.0.0.1:8000，"
+        f"学生账号 `{name}` / `{name}123`，教务 `registrar` / `reg123`。")
+
+
 def _seg(client, reg, course_code):
     """取某课程在某学期的教学班 id。"""
     secs = client.get("/api/sections?course_code=" + course_code,
@@ -527,9 +641,10 @@ def _find(client, token, section_id):
 if __name__ == "__main__":
     cli_paths = [a for a in sys.argv[1:] if not a.startswith("--")]
     cli_seed_only = "--seed-only" in sys.argv
+    cli_live_prep = "--live-prep" in sys.argv
     cli_db = Path(cli_paths[0]).resolve() if cli_paths else None
-    main(cli_db, cli_seed_only)
-    if not cli_seed_only:
+    main(cli_db, cli_seed_only, cli_live_prep)
+    if not (cli_seed_only or cli_live_prep):
         TRACE.parent.mkdir(exist_ok=True)
         TRACE.write_text("\n".join(out_lines), encoding="utf-8")
         print(f"\ntrace written to {TRACE}")

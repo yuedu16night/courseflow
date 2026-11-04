@@ -11,6 +11,14 @@
 - `OK 创建学生 charlie（张雅涵 · 大三CS）` → HTTP 200
 - `OK 创建学生 dave（陈浩然 · 大四CS）` → HTTP 200
 - `OK 创建学生 erin（赵一鸣 · 大二EE）` → HTTP 200
+- `OK 创建学生 frank（孙博文 · 大二CS）` → HTTP 200
+- `OK 创建学生 grace（周雨桐 · 大二CS）` → HTTP 200
+- `OK 创建学生 heidi（吴佳怡 · 大二CS）` → HTTP 200
+- `OK 创建学生 ivan（郑浩然 · 大二CS）` → HTTP 200
+- `OK 创建学生 judy（王安琪 · 大二CS）` → HTTP 200
+- `OK 创建学生 karl（冯子轩 · 大二CS）` → HTTP 200
+- `OK 创建学生 lena（许若曦 · 大二CS）` → HTTP 200
+- `OK 创建学生 mason（邓皓宇 · 大二CS）` → HTTP 200
 - `OK 创建教师 carol（林晓梅）` → HTTP 200
 - 成绩单已载入（SIS 导入，按年级递进）
 
@@ -144,7 +152,7 @@
 - `OK 教学班 CS101.01（林晓梅 · 计算机楼101 · 容量 60）` → HTTP 200
 - `OK 教学班 CS104.01（陈志远 · 计算机楼103 · 容量 1）` → HTTP 200
 - `OK 教学班 CS106.01（王建国 · 计算机楼105 · 容量 60）` → HTTP 200
-- `OK 教学班 CS201.01（刘慧敏 · 计算机楼107 · 容量 1）` → HTTP 200
+- `OK 教学班 CS201.01（刘慧敏 · 计算机楼107 · 容量 2）` → HTTP 200
 - `OK 教学班 CS211.01（张晓东 · 计算机楼109 · 容量 60）` → HTTP 200
 - `OK 教学班 CS222.01（赵丹 · 计算机楼102 · 容量 60）` → HTTP 200
 - `OK 教学班 CS301.01（孙文博 · 计算机楼104 · 容量 60）` → HTTP 200
@@ -217,15 +225,25 @@
 - `OK 修改 CS101 -> 生成不可变版本 2` → HTTP 200
     - CS101 现处于 catalog_version 2
 
-## 3. 多阶段编排：pre_enrollment → allocation（带种子抽签）
-- `OK bob 填报志愿 CS201.01（容量 1）` → HTTP 200
-- `OK erin 填报志愿 CS201.01（容量 1）` → HTTP 200
+## 3. 多阶段编排：pre_enrollment → allocation（人数超容 → 种子随机分配）
+- `OK bob 填报志愿 CS201.01（容量 2）` → HTTP 200
+- `OK erin 填报志愿 CS201.01（容量 2）` → HTTP 200
+- `OK frank 填报志愿 CS201.01（容量 2）` → HTTP 200
+- `OK grace 填报志愿 CS201.01（容量 2）` → HTTP 200
+- `OK heidi 填报志愿 CS201.01（容量 2）` → HTTP 200
+- `OK ivan 填报志愿 CS201.01（容量 2）` → HTTP 200
+- `OK judy 填报志愿 CS201.01（容量 2）` → HTTP 200
+- `OK karl 填报志愿 CS201.01（容量 2）` → HTTP 200
+- `OK lena 填报志愿 CS201.01（容量 2）` → HTTP 200
+- `OK mason 填报志愿 CS201.01（容量 2）` → HTTP 200
 - `OK charlie 填报志愿 CS201.01` → HTTP 400
     - REJECTED: ALREADY_PASSED —— 已通过课程不允许重修选课
 - `OK 推进阶段` → HTTP 200
-    - phase → allocation；交接快照：{'capacity': 1, 'enrolled': 0, 'validated_pending': 2, 'waitlisted': 0}
+    - phase → allocation；交接快照：{'capacity': 2, 'enrolled': 0, 'validated_pending': 10, 'waitlisted': 0}
 - `OK 教务运行带种子的批量分配` → HTTP 200
-    - 分配结果：{'capacity': 1, 'requests': 2, 'enrolled': 1, 'waitlisted': 1}
+    - 分配结果：{'capacity': 2, 'requests': 10, 'enrolled': 2, 'waitlisted': 8}
+    - seed=42 抽签结果：grace, karl 录取；8 人进入候补（bob, erin, frank, heidi, ivan, judy, lena, mason）
+    - 分配对全部合格志愿按 `random.Random(seed).shuffle` 洗牌后取前 N 名，同一 seed 完全可复现
 
 ## 4. add_drop：先到先得 + 事件驱动的候补晋升
 - `OK 推进阶段 → add_drop` → HTTP 200
@@ -243,11 +261,11 @@
     - 学期 CLOSED：选课冻结；审计轨迹不可变
 
 ## 5. 可观测性：审计链与事件日志
-- 选课 #7（alice → CS104.01）生命周期：
+- 选课 #15（alice → CS104.01）生命周期：
     - SUBMITTED → **VALIDATED** by alice (策略校验全部通过)
     - VALIDATED → **WAITLISTED** by alice (名额已满，进入候补队列)
     - WAITLISTED → **ENROLLED** by system:waitlist (从候补队列晋升)
-- 事件日志：共记录 23 条事件，类型：['enrollment.state_changed', 'phase.changed', 'section.seat_released', 'waitlist.promoted']
+- 事件日志：共记录 41 条事件，类型：['enrollment.state_changed', 'phase.changed', 'section.seat_released', 'waitlist.promoted']
 
 ## 6. 培养方案审核与毕业规划（按课程类别学分）
 - dave（大四）：状态 **partial**，总学分 130/132；主修课程 21/21 门；专业选修课 12/15；交叉课程 6/9；通识课程 22/20；个性化课程 8/6
@@ -259,5 +277,5 @@
 - `OK 推进到下一学期` → HTTP 200
     - 2026FA → **2027SP**；自动开课 58 个，升年级 0 人
 - `OK 推进到下一学期` → HTTP 200
-    - 2027SP → **2027FA**；自动开课 64 个，升年级 4 人
+    - 2027SP → **2027FA**；自动开课 64 个，升年级 12 人
     - alice 当前年级：大二（grade=2）；当前学期 2027FA，阶段 pre_enrollment

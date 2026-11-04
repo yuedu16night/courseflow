@@ -146,9 +146,15 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     # different threadpool threads. Every request creates and closes its own
     # connection (no cross-request sharing), so cross-thread *creation vs.
     # use* is safe; concurrent use of one connection never happens.
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False,
+                           timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL: 读事务不阻塞写事务，多个请求连接可以真正并发；busy_timeout
+    # 让并发的写操作排队等待而不是直接抛 "database is locked"。
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 

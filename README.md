@@ -14,7 +14,9 @@ pip install -r requirements.txt
 
 python run.py                  # 在 http://127.0.0.1:8000 提供 API 与演示界面
 python demo/seed_demo.py       # 脚本化端到端场景（打印执行轨迹）
-python -m pytest tests -q      # 103 个自动化测试（含智能体层）
+python demo/seed_demo.py --seed-only   # 只建数据，学期停在 pre_enrollment
+python demo/seed_demo.py --live-prep   # 现场演示用：预置其他学生的志愿 + 演示账号 demo
+python -m pytest tests -q      # 107 个自动化测试（含智能体层与并发用例）
 ```
 
 在浏览器中打开 http://127.0.0.1:8000 并登录：
@@ -24,6 +26,8 @@ python -m pytest tests -q      # 103 个自动化测试（含智能体层）
 | registrar | reg123 | registrar（阶段推进、分配、课程目录） |
 | admin | admin123 | admin（用户、审计） |
 | alice / bob / charlie / dave / erin | `<name>123` | 学生 |
+| frank / grace / heidi / ivan / judy / karl / lena / mason | `<name>123` | 学生（大二 CS，用于演示超容抽签） |
+| demo | demo123 | 学生（仅 `--live-prep` 创建，留作现场演示） |
 
 推荐演示流程：以 `registrar` 身份登录 → 写入课程目录（或先运行 `python demo/seed_demo.py` 得到一个已初始化的学期）→ 以学生身份登录并提交选课请求 → 推进阶段 → 运行批量分配 → 学生退掉一个教学班并观察候补队列自动晋升 → 查看审计轨迹与事件日志。学生另有**我的课表**（周课表网格）、**培养计划**（培养方案审核 + 毕业路线图）与**智能选课助手**（见下文「智能体层」）三个标签页；教务可推进学期，系统按课程常规开课学期自动投放教学班。
 

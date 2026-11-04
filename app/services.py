@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import random
+import threading
 
 from app import curriculum as curriculum_domain
 from app import degree as degree_domain
@@ -164,13 +165,22 @@ class EnrollmentService:
         if failed is not None:
             raise DomainError(failed.code, failed.message)
 
+    # -- concurrency control -------------------------------------------------
+    #: 同一学生的写用例在进程内串行化：策略校验读到的是稳定快照，
+    #: 不会出现「两个并发请求都通过时间冲突校验」。跨进程/跨实例的
+    #: 正确性由仓储层的条件更新（CAS）与原子占座保证。
+    _locks: dict[int, threading.Lock] = {}
+    _locks_guard = threading.Lock()
+
+    @classmethod
+    def _student_lock(cls, student_id: int) -> threading.Lock:
+        with cls._locks_guard:
+            return cls._locks.setdefault(student_id, threading.Lock())
+
     # -- helpers -------------------------------------------------------------
-    def _audit_and_publish(self, enr: dict, target: S, actor: str,
-                           reason: str = "", extra: dict | None = None) -> None:
-        current = S(enr["state"])
-        new_state = transition(current, target)
-        repo.update_enrollment_state(self.conn, enr["id"], new_state.value,
-                                     enr.get("waitlist_seq"), reason)
+    def _record(self, enr: dict, current: S, new_state: S, actor: str,
+                reason: str = "", extra: dict | None = None) -> None:
+        """状态已在数据库中落定，补写只追加审计并发布事件。"""
         repo.append_audit(self.conn, enr["id"], current.value,
                           new_state.value, actor, reason)
         payload = {
@@ -181,11 +191,47 @@ class EnrollmentService:
         repo.append_event(self.conn, EVT_ENROLLMENT_STATE, payload)
         self.bus.publish(EVT_ENROLLMENT_STATE, payload)
 
+    def _audit_and_publish(self, enr: dict, target: S, actor: str,
+                           reason: str = "", extra: dict | None = None) -> bool:
+        """CAS 迁移 + 审计 + 事件；返回是否抢到了这次迁移。"""
+        current = S(enr["state"])
+        new_state = transition(current, target)
+        if not repo.try_transition(self.conn, enr["id"], current.value,
+                                   new_state.value,
+                                   enr.get("waitlist_seq"), reason):
+            return False
+        self._record(enr, current, new_state, actor, reason, extra)
+        return True
+
+    def _assign_seat(self, enr: dict, actor: str,
+                     reason: str = "名额已分配（先到先得）",
+                     from_state: S = S.VALIDATED) -> bool:
+        """原子占座：只有仍有余量时才把记录翻成 ENROLLED。"""
+        transition(from_state, S.ENROLLED)     # 保持 FSM 校验
+        if not repo.try_assign_seat(self.conn, enr["id"], enr["section_id"],
+                                    from_state.value, reason):
+            return False
+        self._record(enr, from_state, S.ENROLLED, actor, reason)
+        return True
+
+    def _waitlist(self, enr: dict, actor: str,
+                  reason: str = "名额已满，进入候补队列") -> bool:
+        """原子入候补：FIFO 序号在数据库内分配，并发下不会重号。"""
+        if not repo.try_waitlist(self.conn, enr["id"], enr["section_id"],
+                                 S.VALIDATED.value, reason):
+            return False
+        self._record(enr, S.VALIDATED, S.WAITLISTED, actor, reason)
+        return True
+
     def _free_seats(self, section: dict) -> int:
         return section["capacity"] - repo.count_enrolled(self.conn, section["id"])
 
     # -- public use-cases -----------------------------------------------------
     def enroll(self, user: dict, section_id: int) -> dict:
+        with self._student_lock(user["id"]):
+            return self._enroll(user, section_id)
+
+    def _enroll(self, user: dict, section_id: int) -> dict:
         semester = self._require_open_semester()
         section = repo.get_section(self.conn, section_id)
         if section is None or section["semester"] != semester:
@@ -233,25 +279,34 @@ class EnrollmentService:
             # capacity-blind wish; seats are assigned by the AllocationService
             return self._view(repo.get_enrollment(self.conn, enr_id))
 
-        # ADD_DROP: synchronous first-come-first-served
-        if self._free_seats(section) > 0:
-            self._audit_and_publish(repo.get_enrollment(self.conn, enr_id),
-                                    S.ENROLLED, user["username"], "名额已分配（先到先得）")
-        else:
-            seq = repo.next_waitlist_seq(self.conn, section_id)
-            repo.update_enrollment_state(self.conn, enr_id,
-                                         S.WAITLISTED.value, seq,
-                                         "名额已满，进入候补队列")
-            repo.append_audit(self.conn, enr_id, S.VALIDATED.value,
-                              S.WAITLISTED.value, user["username"],
-                              "名额已满，进入候补队列")
-        return self._view(repo.get_enrollment(self.conn, enr_id))
+        # ADD_DROP：先到先得。占座是原子操作——并发抢最后一个席位时只有
+        # 一个请求能把记录翻成 ENROLLED，其余自动转入候补，不会超卖。
+        current = repo.get_enrollment(self.conn, enr_id)
+        if self._assign_seat(current, user["username"]):
+            return self._view(repo.get_enrollment(self.conn, enr_id))
+        if self._waitlist(current, user["username"]):
+            return self._view(repo.get_enrollment(self.conn, enr_id))
+        raise DomainError("CONCURRENT_MODIFICATION",
+                          "选课记录被并发修改，请重试", 409)
 
     def drop(self, user: dict, enrollment_id: int) -> dict:
+        with self._student_lock(user["id"]):
+            view, released = self._drop(user, enrollment_id)
+        # 事件在释放学生锁之后发布：候补晋升会去拿「被晋升学生」的锁，
+        # 若持锁发布，两名学生互相退课时可能形成锁环。
+        if released is not None:
+            self.bus.publish(EVT_SEAT_RELEASED, released)
+        return view
+
+    def _drop(self, user: dict,
+              enrollment_id: int) -> tuple[dict, dict | None]:
         enr = repo.get_enrollment(self.conn, enrollment_id)
         if enr is None or enr["student_id"] != user["id"]:
             raise DomainError("ENROLLMENT_UNKNOWN",
                               "找不到该学生的选课记录", 404)
+        if S(enr["state"]) == S.DROPPED:
+            # 幂等：并发/重复退课不应把「已退」当成错误
+            return self._view(enr), None
         if S(enr["state"]) not in (S.ENROLLED, S.WAITLISTED, S.VALIDATED):
             raise DomainError("INVALID_STATE",
                               f"当前状态（{enr['state']}）不允许退课")
@@ -259,24 +314,31 @@ class EnrollmentService:
         # FSM: ENROLLED -> DROPPED, pending states -> CANCELLED
         target = S.DROPPED if S(enr["state"]) == S.ENROLLED else S.CANCELLED
         was_enrolled = S(enr["state"]) == S.ENROLLED
-        self._audit_and_publish(enr, target, user["username"],
-                                "学生发起退课")
+        if not self._audit_and_publish(enr, target, user["username"],
+                                       "学生发起退课"):
+            latest = repo.get_enrollment(self.conn, enrollment_id)
+            if latest is not None and latest["state"] == target.value:
+                return self._view(latest), None   # 并发重复退课：幂等返回
+            raise DomainError("CONCURRENT_MODIFICATION",
+                              "退课请求与其它操作冲突，请重试", 409)
+        released = None
         if was_enrolled:
             section = repo.get_section(self.conn, enr["section_id"])
-            payload = {"section_id": section["id"],
-                       "semester": section["semester"]}
-            repo.append_event(self.conn, EVT_SEAT_RELEASED, payload)
-            self.bus.publish(EVT_SEAT_RELEASED, payload)
-        return self._view(repo.get_enrollment(self.conn, enrollment_id))
+            released = {"section_id": section["id"],
+                        "semester": section["semester"]}
+            repo.append_event(self.conn, EVT_SEAT_RELEASED, released)
+        return self._view(repo.get_enrollment(self.conn, enrollment_id)), released
 
     def my_enrollments(self, user: dict) -> list[dict]:
         return [self._view(e) for e in
                 repo.list_enrollments(self.conn, student_id=user["id"])]
 
     def eligible_sections(self, user: dict) -> list[dict]:
-        """当前学期中该学生此刻可选的教学班：先修已满足、未通过、仍有余额。
+        """当前学期中该学生此刻可选的教学班：先修已满足、未通过。
         已在本学期选中的教学班同样返回，并附带 enrollment_id，
-        供界面把按钮就地切换为「退课」而课程行不消失。"""
+        供界面把按钮就地切换为「退课」而课程行不消失。
+        满员的教学班也返回（free_seats=0），界面据此显示「候补」按钮 ——
+        选课申请仍会走同一条策略链，占座失败即转入候补队列。"""
         semester = repo.get_current_semester(self.conn)
         catalog = {c["code"]: c for c in repo.list_active_courses(self.conn)}
         completed: set[str] = set(user["completed_courses"])
@@ -304,8 +366,6 @@ class EnrollmentService:
                     continue                   # 已通过 / 本学期已在选其它班
                 if any(p not in completed for p in course["prerequisites"]):
                     continue                   # 先修未满足
-                if self._free_seats(sec) <= 0:
-                    continue                   # 无余额
             out.append({**sec, "title": course["title"],
                         "credits": course["credits"],
                         "category": course["category"],
@@ -402,23 +462,16 @@ class AllocationService:
             pending = repo.list_enrollments(self.conn, section_id=section["id"],
                                             state=S.VALIDATED.value)
             rng.shuffle(pending)
-            seats = section["capacity"]
             enrolled_n = waitlisted_n = 0
-            for i, e in enumerate(pending):
+            for e in pending:
                 enr = repo.get_enrollment(self.conn, e["id"])
-                if i < seats:
-                    self.enroll._audit_and_publish(enr, S.ENROLLED,
-                                                   "system:allocation",
-                                                   "抽签分配到名额")
+                # 原子占座：即使同一教学班被重复分配，也不会超卖；
+                # 座位满了自然落入候补分支。
+                if self.enroll._assign_seat(enr, "system:allocation",
+                                            "抽签分配到名额"):
                     enrolled_n += 1
-                else:
-                    seq = repo.next_waitlist_seq(self.conn, section["id"])
-                    repo.update_enrollment_state(
-                        self.conn, e["id"], S.WAITLISTED.value, seq,
-                        "抽签未中，进入候补队列")
-                    repo.append_audit(self.conn, e["id"], S.VALIDATED.value,
-                                      S.WAITLISTED.value, "system:allocation",
-                                      "抽签未中，进入候补队列")
+                elif self.enroll._waitlist(enr, "system:allocation",
+                                           "抽签未中，进入候补队列"):
                     waitlisted_n += 1
             summary["sections"][f"{section['course_code']}.{section['section_no']}"] = {
                 "capacity": section["capacity"], "requests": len(pending),
@@ -662,6 +715,24 @@ class SemesterService:
         current = repo.get_current_semester(self.conn)
         nxt = degree_domain.next_semester_codes(current, 2)[1]
 
+        # 学期结算：离开当前学期时，已选上的课程计入学生成绩单
+        # （本系统不做成绩评定，ENROLLED 视为通过），这样升入高年级后
+        # 培养计划里会显示这部分「已修」，而不是回退成「未修」。
+        settled = 0
+        for e in repo.list_enrollments(self.conn, semester=current):
+            if e["state"] != S.ENROLLED.value:
+                continue
+            section = repo.get_section(self.conn, e["section_id"])
+            student = repo.get_user(self.conn, e["student_id"])
+            if section is None or student is None:
+                continue
+            completed = set(student["completed_courses"])
+            if section["course_code"] in completed:
+                continue
+            repo.set_completed_courses(self.conn, student["id"],
+                                       completed | {section["course_code"]})
+            settled += 1
+
         # 目标学期行：缺失则以 PRE_ENROLLMENT 建之（幂等）
         if repo.get_semester(self.conn, nxt) is None:
             repo.upsert_semester(self.conn, nxt, Phase.PRE_ENROLLMENT.value)
@@ -688,9 +759,11 @@ class SemesterService:
 
         repo.set_current_semester(self.conn, nxt)
         payload = {"from": current, "to": nxt,
-                   "sections_created": created, "students_promoted": promoted}
+                   "sections_created": created, "students_promoted": promoted,
+                   "courses_completed": settled}
         repo.append_event(self.conn, EVT_SEMESTER_ADVANCED, payload)
         self.bus.publish(EVT_SEMESTER_ADVANCED, payload)
         return {"previous": current, "semester": nxt,
                 "phase": Phase.PRE_ENROLLMENT.value,
-                "sections_created": created, "students_promoted": promoted}
+                "sections_created": created, "students_promoted": promoted,
+                "courses_completed": settled}

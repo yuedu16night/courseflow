@@ -50,18 +50,27 @@ class WaitlistEngine:
             if svc._free_seats(section) <= 0:
                 return
             user = repo.get_user(conn, head["student_id"])
-            try:
-                # re-validate policies against the *current* world state
-                svc._run_policies(user, section,
-                                  exclude_enrollment_id=head["id"])
-            except DomainError as exc:
-                # head no longer eligible: expire it and keep scanning
-                svc._audit_and_publish(
-                    head, S.EXPIRED, "system:waitlist",
-                    f"候补晋升失败：{exc.code}：{exc.message}")
-                continue
-            svc._audit_and_publish(
-                head, S.ENROLLED, "system:waitlist", "从候补队列晋升")
+            # 与「该学生自己发起的选课/退课」互斥，保证策略校验看到稳定快照。
+            # 调用方（drop）已释放锁后再发布事件，因此这里不会形成锁环。
+            with EnrollmentService._student_lock(user["id"]):
+                head = repo.get_enrollment(conn, head["id"])
+                if head is None or head["state"] != S.WAITLISTED.value:
+                    continue
+                try:
+                    # re-validate policies against the *current* world state
+                    svc._run_policies(user, section,
+                                      exclude_enrollment_id=head["id"])
+                except DomainError as exc:
+                    # head no longer eligible: expire it and keep scanning
+                    svc._audit_and_publish(
+                        head, S.EXPIRED, "system:waitlist",
+                        f"候补晋升失败：{exc.code}：{exc.message}")
+                    continue
+                # 原子占座：并发的另一个晋升/抢课先把座位占掉时，本轮退出
+                if not svc._assign_seat(head, "system:waitlist",
+                                        "从候补队列晋升",
+                                        from_state=S.WAITLISTED):
+                    return
             payload = {"enrollment_id": head["id"], "section_id": section_id,
                        "student_id": head["student_id"]}
             repo.append_event(conn, EVT_WAITLIST_PROMOTED, payload)

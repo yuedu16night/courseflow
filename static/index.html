@@ -207,7 +207,7 @@ async function render(tab){
           <td>${s.enrolled_count}/${s.capacity}</td>
           <td>${s.enrollment_id
             ? `<button class="act red" onclick="enrollDrop(${s.enrollment_id})">退课</button>`
-            : `<button class="act" onclick="enrollSection(${s.id})">选课</button>`}</td></tr>`).join("")}</table></div>`).join("")
+            : `<button class="act" onclick="enrollSection(${s.id})">${s.free_seats > 0 ? "选课" : "候补"}</button>`}</td></tr>`).join("")}</table></div>`).join("")
       : `<p class="muted">当前没有可选的课程。</p>`}</div>`;
   }
   if(tab==="my"){

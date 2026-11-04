@@ -349,6 +349,59 @@ def next_waitlist_seq(conn, section_id: int) -> int:
     return row["seq"]
 
 
+# -- 并发安全的写操作（compare-and-swap / 原子占座）-------------------------
+def try_transition(conn, enrollment_id: int, from_state: str, to_state: str,
+                   waitlist_seq=None, reason="") -> bool:
+    """CAS 状态迁移：仅当记录仍处于 from_state 时才更新。
+
+    返回是否抢到了这次迁移。并发退课 / 分配时，只有第一个请求能成功，
+    其余请求看到 rowcount=0，由调用方决定幂等返回还是报冲突。
+    """
+    cur = conn.execute(
+        "UPDATE enrollments SET state=?, waitlist_seq=?, reason=?, updated_at=?"
+        " WHERE id=? AND state=?",
+        (to_state, waitlist_seq, reason, time.time(), enrollment_id, from_state),
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def try_assign_seat(conn, enrollment_id: int, section_id: int,
+                    from_state: str, reason="") -> bool:
+    """原子占座：余量判定与状态翻转在同一条 UPDATE 内完成。
+
+    SQLite 对单条写语句持排他锁，因此并发请求中只有一个能看到
+    `enrolled < capacity` 成立；其余请求 rowcount 为 0，转而进入候补。
+    """
+    cur = conn.execute(
+        "UPDATE enrollments SET state='ENROLLED', waitlist_seq=NULL,"
+        " reason=?, updated_at=?"
+        " WHERE id=? AND state=?"
+        "   AND (SELECT COUNT(*) FROM enrollments e2"
+        "        WHERE e2.section_id=? AND e2.state='ENROLLED')"
+        "       < (SELECT capacity FROM sections WHERE id=?)",
+        (reason, time.time(), enrollment_id, from_state, section_id, section_id),
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def try_waitlist(conn, enrollment_id: int, section_id: int,
+                 from_state: str, reason="") -> bool:
+    """原子入候补：FIFO 序号在同一条 UPDATE 内分配，避免并发取到相同序号。"""
+    cur = conn.execute(
+        "UPDATE enrollments SET state='WAITLISTED',"
+        " waitlist_seq=(SELECT COALESCE(MAX(waitlist_seq), 0) + 1"
+        "               FROM enrollments e2 WHERE e2.section_id=?"
+        "               AND e2.state='WAITLISTED'),"
+        " reason=?, updated_at=?"
+        " WHERE id=? AND state=?",
+        (section_id, reason, time.time(), enrollment_id, from_state),
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
 def waitlist_head(conn, section_id: int):
     """FIFO: lowest waitlist_seq among WAITLISTED records."""
     row = conn.execute(

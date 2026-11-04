@@ -136,3 +136,19 @@ def test_stage_handover_snapshot(env):
     # the snapshot is readable afterwards via the phase status endpoint
     r = env["client"].get("/api/admin/phase", headers=h)
     assert r.json()["handover_context"]["sections"][section_key]["validated_pending"] == 1
+
+
+def test_semester_advance_settles_completed_courses(env):
+    """推进学期后，上学期已选上的课程计入已修，培养计划不回退成未修。"""
+    advance_to(env, "add_drop", hdr(env, "registrar"))
+    r = env["client"].post("/api/enrollments", headers=hdr(env, "alice"),
+                           json={"section_id": env["s1"]})
+    assert r.json()["state"] == "ENROLLED"
+
+    r = env["client"].post("/api/admin/semester/advance",
+                           headers=hdr(env, "registrar"))
+    assert r.status_code == 200 and r.json()["courses_completed"] >= 1
+
+    d = env["client"].get("/api/degree/me", headers=hdr(env, "alice")).json()
+    rows = [x for g in d["course_status"] for x in g["courses"]]
+    assert next(x for x in rows if x["code"] == "CS201")["status"] == "已修"
